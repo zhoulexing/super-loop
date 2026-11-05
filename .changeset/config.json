@@ -1,0 +1,9 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@4/schema.json",
+  "baseBranch": "main",
+  "access": "restricted",
+  "format": false,
+  "commit": false,
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}

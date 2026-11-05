@@ -1,0 +1,31 @@
+{
+  "name": "@super-loop/agent-echo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "参考 Agent 插件：回显提示词，用于联调与作为插件模板",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@super-loop/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@super-loop/protocol": "workspace:*",
+    "@super-loop/shared": "workspace:*",
+    "@super-loop/plugin-sdk": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@super-loop/testkit": "workspace:*"
+  }
+}

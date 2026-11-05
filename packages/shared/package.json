@@ -1,0 +1,27 @@
+{
+  "name": "@super-loop/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "错误、ID、时钟、日志、重试、模板等通用工具",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@super-loop/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@super-loop/protocol": "workspace:*",
+    "pino": "catalog:",
+    "ulid": "catalog:"
+  }
+}

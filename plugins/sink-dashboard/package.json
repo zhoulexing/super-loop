@@ -1,0 +1,31 @@
+{
+  "name": "@super-loop/sink-dashboard",
+  "version": "0.0.0",
+  "private": true,
+  "description": "把通知写入看板收件箱（默认启用）",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@super-loop/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@super-loop/protocol": "workspace:*",
+    "@super-loop/shared": "workspace:*",
+    "@super-loop/plugin-sdk": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@super-loop/testkit": "workspace:*"
+  }
+}

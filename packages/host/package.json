@@ -1,0 +1,30 @@
+{
+  "name": "@super-loop/host",
+  "version": "0.0.0",
+  "private": true,
+  "description": "\u5bbf\u4e3b\u516c\u5171\u80fd\u529b\uff1a~/.super-loop \u76ee\u5f55\u5e03\u5c40\u3001\u914d\u7f6e\u52a0\u8f7d\u3001\u5bc6\u94a5\u3001\u5355\u5b9e\u4f8b\u9501\uff08server / cli / watchdog \u5171\u7528\uff09",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@super-loop/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@super-loop/protocol": "workspace:*",
+    "@super-loop/shared": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@super-loop/testkit": "workspace:*"
+  }
+}

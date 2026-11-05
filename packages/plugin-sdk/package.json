@@ -1,0 +1,27 @@
+{
+  "name": "@super-loop/plugin-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "插件开发 SDK：definePlugin 与常用辅助",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@super-loop/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@super-loop/protocol": "workspace:*",
+    "@super-loop/shared": "workspace:*",
+    "zod": "catalog:"
+  }
+}

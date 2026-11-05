@@ -1,0 +1,29 @@
+{
+  "name": "@super-loop/store-sqlite",
+  "version": "0.0.0",
+  "private": true,
+  "description": "\u9ed8\u8ba4\u5b58\u50a8\uff1a\u57fa\u4e8e node:sqlite \u7684 Store \u5b9e\u73b0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@super-loop/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@super-loop/protocol": "workspace:*",
+    "@super-loop/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@super-loop/testkit": "workspace:*"
+  }
+}

@@ -1,0 +1,14 @@
+packages:
+  - packages/*
+  - plugins/*
+  - apps/*
+
+# 统一第三方依赖版本：包内使用 "catalog:" 引用
+catalog:
+  "@hono/node-server": ^2.1.6
+  hono: ^4.13.16
+  tsx: ^4.23.15
+  pino: ^10.4.0
+  ulid: ^3.0.2
+  vitest: ^4.1.12
+  zod: ^4.6.7

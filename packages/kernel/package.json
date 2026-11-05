@@ -1,0 +1,30 @@
+{
+  "name": "@super-loop/kernel",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Loop 内核：入队去重、Journal、路由、调度、租约、重试、审批、Outbox、插件生命周期",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@super-loop/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@super-loop/protocol": "workspace:*",
+    "@super-loop/shared": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@super-loop/testkit": "workspace:*"
+  }
+}

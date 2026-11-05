@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.turbo/
+*.log
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# 本地开发用的 Super Loop 主目录（pnpm dev）
+.super-loop-dev/

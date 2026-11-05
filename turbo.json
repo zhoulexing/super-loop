@@ -1,0 +1,32 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "globalEnv": [
+    "E2E",
+    "SUPER_LOOP_HOME",
+    "SUPER_LOOP_DB_DIR",
+    "SUPER_LOOP_ATTACHMENTS_DIR",
+    "SUPER_LOOP_WORKSPACES_DIR",
+    "SUPER_LOOP_HOST",
+    "SUPER_LOOP_PORT",
+    "SUPER_LOOP_PUBLIC_URL",
+    "SUPER_LOOP_API_TOKEN",
+    "SUPER_LOOP_LOG_LEVEL"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "tsconfig*.json", "package.json"],
+      "outputs": ["dist/**"]
+    },
+    "typecheck": {
+      "inputs": ["src/**", "test/**", "tsconfig*.json", "package.json"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

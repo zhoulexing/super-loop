@@ -1,0 +1,31 @@
+{
+  "name": "@super-loop/testkit",
+  "version": "0.0.0",
+  "private": true,
+  "description": "测试工具：内存 Store、假时钟、测试上下文与插件契约测试",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@super-loop/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@super-loop/protocol": "workspace:*",
+    "@super-loop/shared": "workspace:*",
+    "@super-loop/plugin-sdk": "workspace:*",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "vitest": "catalog:"
+  }
+}
