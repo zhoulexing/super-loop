@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ErrorPayloadSchema, FileRefSchema, JsonObjectSchema } from './common.js';
 import { EnvelopeSchema } from './envelope.js';
-import { RunIdSchema, TaskIdSchema } from './ids.js';
+import { RunIdSchema, TaskIdSchema, TurnIdSchema } from './ids.js';
 import { UsageSchema } from './task.js';
 
 export const AgentCapabilitiesSchema = z.object({
@@ -16,16 +16,33 @@ export const AgentCapabilitiesSchema = z.object({
 });
 export type AgentCapabilities = z.infer<typeof AgentCapabilitiesSchema>;
 
+/** 会话历史中的一条（之前各轮的输入与回复）。 */
+export const ConversationMessageSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  content: z.string(),
+});
+export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
+
 export const AgentRunInputSchema = z.object({
   runId: RunIdSchema,
   taskId: TaskIdSchema,
+  /** 本轮内第几次尝试。 */
   attempt: z.number().int().min(1),
   envelope: EnvelopeSchema,
-  /** 已渲染的提示词。 */
+  /** 当前这一轮：首轮 index 为 1。 */
+  turn: z.object({ id: TurnIdSchema, index: z.number().int().min(1) }),
+  /**
+   * 本轮的输入：首轮为渲染后的提示词，之后为人的追问。
+   * 支持 resume 的 Agent 带上 resume.sessionId 续跑即可；否则应结合 history 理解上下文。
+   */
   prompt: z.string(),
+  /** 之前各轮的输入与回复（按时间顺序，不含本轮）。 */
+  history: z.array(ConversationMessageSchema),
   /** 已通过插件 optionsSchema 校验的选项。 */
   options: JsonObjectSchema,
+  /** 工作目录，同一任务的多轮对话共用（workspaces/<taskId>/work）。 */
   workspace: z.object({ path: z.string().min(1) }).optional(),
+  /** 同一任务上一次由同一 Agent 实例产生的会话 ID。 */
   resume: z.object({ sessionId: z.string().min(1) }).optional(),
 });
 export type AgentRunInput = z.infer<typeof AgentRunInputSchema>;

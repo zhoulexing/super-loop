@@ -4,7 +4,7 @@ import type { JournalEvent, JournalEventDraft, JournalEventType } from './journa
 import type { KvStore } from './plugin.js';
 import type { Route } from './route.js';
 import type { Delivery } from './sink.js';
-import type { Run, Task } from './task.js';
+import type { Run, Task, Turn } from './task.js';
 import type { Incident, Remediation } from './watchdog.js';
 
 export interface Page<T> {
@@ -42,6 +42,7 @@ export interface StoreTx {
   readonly envelopes: EnvelopeRepo;
   readonly tasks: Repo<Task>;
   readonly runs: Repo<Run>;
+  readonly turns: Repo<Turn>;
   readonly routes: Repo<Route>;
   readonly approvals: Repo<Approval>;
   readonly deliveries: Repo<Delivery>;

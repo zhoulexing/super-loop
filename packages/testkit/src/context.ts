@@ -14,6 +14,7 @@ import {
   type RunId,
   type RunPaths,
   type SourceContext,
+  type TaskId,
 } from '@super-loop/protocol';
 import { createMemoryContentStore, newId } from '@super-loop/shared';
 import { FakeClock } from './clock.js';
@@ -102,6 +103,7 @@ export function createTestSourceContext(options: TestPluginContextOptions = {}):
 }
 
 export interface TestAgentRunContextOptions extends TestPluginContextOptions {
+  taskId?: TaskId;
   runId?: RunId;
   /** Run 的目录（work / artifacts 等），默认为空。 */
   runPaths?: RunPaths;
@@ -123,10 +125,12 @@ export function createTestAgentRunContext(
   const spawned: EnvelopeDraft[] = [];
   const approve = options.approve ?? true;
   const runId = options.runId ?? newId('run');
+  const taskId = options.taskId ?? newId('task');
   return {
     ...base,
     runId,
-    files: base.content.artifacts(runId),
+    taskId,
+    files: base.content.artifacts({ taskId, runId }),
     paths: { ...base.paths, ...options.runPaths },
     approvalRequests,
     spawned,

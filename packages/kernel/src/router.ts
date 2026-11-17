@@ -1,6 +1,7 @@
 import type {
   AgentBinding,
   Envelope,
+  InstanceName,
   JsonPathCondition,
   Priority,
   Route,
@@ -13,15 +14,23 @@ import { getPath } from '@super-loop/shared';
 
 export interface ResolvedBinding {
   routeId?: RouteId;
-  agent: AgentBinding;
+  /** 为空表示手动分配（Task 进入 unassigned）。 */
+  agent?: AgentBinding;
+  /** 手动分配（或交给 Router）时的候选 Agent。 */
+  candidates?: AgentBinding[];
+  /** 交给哪个 Router 插件实例判断（此时 agent 为空）。 */
+  router?: InstanceName;
   sinks: SinkBinding[];
   policy: TaskPolicy;
   priority: Priority;
+  closeOnComplete?: boolean;
 }
 
 export interface RouterDefaults {
   policy: TaskPolicy;
   priority: Priority;
+  /** defaults.router：Route 的 assign 为 router 但没指定实例时使用。 */
+  router?: InstanceName | undefined;
 }
 
 function globToRegExp(glob: string): RegExp {
@@ -79,8 +88,10 @@ export function matchRoute(match: RouteMatch, envelope: Envelope): boolean {
  * 决定一个 Envelope 生成哪些 Task：
  * 1. directives.agents 存在 → 只用 directives（显式指定优先于 Route）；
  * 2. directives.skipRoutes → 不匹配 Route；
- * 3. 否则按 order 匹配启用的 Route，stopOnMatch 为 false 时继续匹配（扇出）。
- * directives.sinks 总是追加到结果上。
+ * 3. 否则按 order 匹配启用的 Route，stopOnMatch 为 false 时继续匹配（扇出）；
+ *    assign 为 manual 的 Route 生成一个不带 Agent 的绑定，agents 作为候选；
+ *    assign 为 router 的 Route 同样不带 Agent，并标记交给哪个 Router。
+ * directives.sinks 总是追加到结果上。返回空数组表示未路由（由内核按 defaults.unrouted 处理）。
  */
 export function resolveBindings(
   envelope: Envelope,
@@ -107,14 +118,24 @@ export function resolveBindings(
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   for (const route of ordered) {
     if (!matchRoute(route.match, envelope)) continue;
-    for (const agent of route.agents) {
+    const common = {
+      routeId: route.id,
+      sinks: [...route.sinks, ...extraSinks],
+      policy: route.policy,
+      priority,
+      ...(route.closeOnComplete === undefined ? {} : { closeOnComplete: route.closeOnComplete }),
+    };
+    if (route.assign === 'router') {
+      const router = route.router ?? defaults.router;
       out.push({
-        routeId: route.id,
-        agent,
-        sinks: [...route.sinks, ...extraSinks],
-        policy: route.policy,
-        priority,
+        ...common,
+        ...(route.agents.length ? { candidates: route.agents } : {}),
+        ...(router ? { router } : {}),
       });
+    } else if (route.assign === 'manual' || route.agents.length === 0) {
+      out.push({ ...common, ...(route.agents.length ? { candidates: route.agents } : {}) });
+    } else {
+      for (const agent of route.agents) out.push({ ...common, agent });
     }
     if (route.stopOnMatch) break;
   }
@@ -122,8 +143,13 @@ export function resolveBindings(
 }
 
 /** 校验 Route 中的正则，返回错误列表（用于加载配置时提前报错）。 */
-export function validateRoute(route: Pick<Route, 'name' | 'match'>): string[] {
+export function validateRoute(
+  route: Pick<Route, 'name' | 'match' | 'assign' | 'agents'>,
+): string[] {
   const errors: string[] = [];
+  if (route.assign === 'auto' && route.agents.length === 0) {
+    errors.push(`route "${route.name}": assign "auto" requires at least one agent`);
+  }
   if (route.match.subjectRegex !== undefined && !safeRegExp(route.match.subjectRegex)) {
     errors.push(`route "${route.name}": invalid subjectRegex`);
   }

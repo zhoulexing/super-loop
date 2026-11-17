@@ -7,9 +7,10 @@ import type {
   FileRef,
   FileStore,
   InstanceName,
-  RunId,
+  RunScope,
 } from '@super-loop/protocol';
 import {
+  artifactPrefix,
   assertFileSize,
   ErrorCode,
   guessMime,
@@ -31,11 +32,16 @@ export interface FsContentOptions {
 
 export const DEFAULT_MAX_FILE_BYTES = 50 * 1024 * 1024;
 
+const TASK_ID = /^task_[0-9A-HJKMNP-TV-Z]{26}$/;
 const RUN_ID = /^run_[0-9A-HJKMNP-TV-Z]{26}$/;
 
-function assertRunId(runId: string): void {
-  if (!RUN_ID.test(runId)) {
-    throw new LoopError(ErrorCode.INVALID_INPUT, `invalid run id: ${runId}`, { retryable: false });
+function assertScope(scope: RunScope): void {
+  if (!TASK_ID.test(scope.taskId) || !RUN_ID.test(scope.runId)) {
+    throw new LoopError(
+      ErrorCode.INVALID_INPUT,
+      `invalid run scope: ${scope.taskId}/${scope.runId}`,
+      { retryable: false },
+    );
   }
 }
 
@@ -51,8 +57,8 @@ async function exists(path: string): Promise<boolean> {
 /**
  * 基于主目录的内容存储与目录提供者：
  * - 附件：`attachments/<YYYY-MM-DD>/<ULID>-<文件名>`
- * - 产物：`workspaces/<runId>/artifacts/<路径>`（Agent 可直接写入该目录）
- * - 工作区：`workspaces/<runId>/work/`
+ * - 产物：`workspaces/<taskId>/artifacts/<runId>/<路径>`（Agent 可直接写入该目录）
+ * - 工作区：`workspaces/<taskId>/work/`，同一任务的多轮对话共用
  * - 共享 / 状态 / 缓存：`shared/`、`state/<plugin>/<instance>/`、`cache/<plugin>/`
  */
 export function createFsContent(
@@ -61,15 +67,15 @@ export function createFsContent(
 ): ContentStore & DirectoryProvider {
   const maxBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const today = options.today ?? (() => new Date().toISOString().slice(0, 10));
-  const runDir = (runId: string) => join(layout.workspacesDir, runId);
-  const artifactsDir = (runId: string) => join(runDir(runId), 'artifacts');
+  const taskDir = (taskId: string) => join(layout.workspacesDir, taskId);
+  const artifactsDir = (s: RunScope) => join(taskDir(s.taskId), 'artifacts', s.runId);
 
   /** 引用 → 绝对路径（parseFileRef 已拒绝 .. 与空段）。 */
   const pathOf = (ref: string): string => {
     const p = parseFileRef(ref);
     return p.kind === 'attachment'
       ? join(layout.attachmentsDir, p.date, p.file)
-      : join(artifactsDir(p.runId), ...p.path.split('/'));
+      : join(artifactsDir(p), ...p.path.split('/'));
   };
 
   /**
@@ -78,7 +84,7 @@ export function createFsContent(
    */
   const safePath = async (ref: string): Promise<string> => {
     const p = parseFileRef(ref);
-    const root = p.kind === 'attachment' ? layout.attachmentsDir : artifactsDir(p.runId);
+    const root = p.kind === 'attachment' ? layout.attachmentsDir : artifactsDir(p);
     const [realRoot, real] = await Promise.all([realpath(root), realpath(pathOf(ref))]);
     if (!real.startsWith(realRoot + sep)) {
       throw new LoopError(ErrorCode.PERMISSION_DENIED, `file escapes its directory: ${ref}`, {
@@ -120,17 +126,19 @@ export function createFsContent(
   return {
     attachments,
 
-    artifacts(runId: RunId): FileStore {
-      assertRunId(runId);
+    artifacts(scope: RunScope): FileStore {
+      assertScope(scope);
+      const dir = artifactsDir(scope);
+      const prefix = artifactPrefix(scope);
       return {
         async put(data, meta) {
           const bytes = toBytes(data);
           const base = sanitizeFileName(meta.name);
           assertFileSize(bytes.byteLength, maxBytes, base);
           let n = 0;
-          while (await exists(join(artifactsDir(runId), withSuffix(base, n)))) n++;
+          while (await exists(join(dir, withSuffix(base, n)))) n++;
           const name = withSuffix(base, n);
-          const ref = `artifact:${runId}/${name}`;
+          const ref = `${prefix}${name}`;
           await write(pathOf(ref), bytes);
           return { ref, name, mime: meta.mime ?? guessMime(name), size: bytes.byteLength };
         },
@@ -152,9 +160,10 @@ export function createFsContent(
       }
     },
 
-    async listArtifacts(runId) {
-      assertRunId(runId);
-      const dir = artifactsDir(runId);
+    async listArtifacts(scope) {
+      assertScope(scope);
+      const dir = artifactsDir(scope);
+      const prefix = artifactPrefix(scope);
       let entries: Dirent[];
       try {
         entries = await readdir(dir, { recursive: true, withFileTypes: true, encoding: 'utf8' });
@@ -165,7 +174,7 @@ export function createFsContent(
       for (const e of entries) {
         if (!e.isFile()) continue;
         const rel = relative(dir, join(e.parentPath, e.name)).split(sep).join('/');
-        const ref = `artifact:${runId}/${rel}`;
+        const ref = `${prefix}${rel}`;
         try {
           parseFileRef(ref);
         } catch {
@@ -177,10 +186,10 @@ export function createFsContent(
       return out.sort((a, b) => a.ref.localeCompare(b.ref));
     },
 
-    async workspace(runId) {
-      assertRunId(runId);
-      const work = join(runDir(runId), 'work');
-      const artifacts = artifactsDir(runId);
+    async workspace(scope) {
+      assertScope(scope);
+      const work = join(taskDir(scope.taskId), 'work');
+      const artifacts = artifactsDir(scope);
       await mkdir(work, { recursive: true, mode: 0o700 });
       await mkdir(artifacts, { recursive: true, mode: 0o700 });
       return { work, artifacts };

@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 export const HOME_DIRNAME = '.super-loop';
 
 /**
- * Super Loop 主目录布局（AGENTS.md §11）。所有运行时文件都在这里，代码仓库里不放任何运行时数据。
+ * Super Loop 主目录布局（docs/runtime.md）。所有运行时文件都在这里，代码仓库里不放任何运行时数据。
  * 系统状态（db/）与内容（attachments/、workspaces/）分开存放，可以各自搬迁、备份与清理。
  *
  * ```
@@ -15,9 +15,9 @@ export const HOME_DIRNAME = '.super-loop';
  * ├── secrets.env                 密钥 KEY=VALUE（0600），配置中用 ${secret:NAME} 引用
  * ├── db/loop.db                  系统状态，只有内核读写（SUPER_LOOP_DB_DIR）
  * ├── attachments/<日期>/<ULID>-<文件名>   外部带进来的附件（SUPER_LOOP_ATTACHMENTS_DIR）
- * ├── workspaces/<runId>/         每次 Run 一个（SUPER_LOOP_WORKSPACES_DIR）
- * │   ├── work/                   Agent 工作目录（cwd），临时
- * │   └── artifacts/              交付结果，Run 结束时自动登记
+ * ├── workspaces/<taskId>/        每个任务（会话）一个（SUPER_LOOP_WORKSPACES_DIR）
+ * │   ├── work/                   Agent 工作目录（cwd），多轮对话共用，临时
+ * │   └── artifacts/<runId>/      交付结果，Run 结束时自动登记
  * ├── shared/                     用户维护的共享资料，Agent 只读
  * ├── state/<plugin>/<instance>/  插件实例的持久状态（会话、登录态）
  * ├── cache/<plugin>/             可随时删除的缓存（git 镜像等）

@@ -5,7 +5,10 @@ export const ID_PREFIX = {
   envelope: 'env',
   task: 'task',
   run: 'run',
+  turn: 'turn',
   route: 'rt',
+  /** 一批交给 Router 的 Task。 */
+  routingBatch: 'rtb',
   approval: 'apv',
   incident: 'inc',
   remediation: 'rem',
@@ -28,6 +31,7 @@ function idSchema<K extends IdKind>(kind: K): z.ZodType<IdOf<K>> {
 export const EnvelopeIdSchema = idSchema('envelope');
 export const TaskIdSchema = idSchema('task');
 export const RunIdSchema = idSchema('run');
+export const TurnIdSchema = idSchema('turn');
 export const RouteIdSchema = idSchema('route');
 export const ApprovalIdSchema = idSchema('approval');
 export const IncidentIdSchema = idSchema('incident');
@@ -39,6 +43,7 @@ export const TraceIdSchema = idSchema('trace');
 export type EnvelopeId = IdOf<'envelope'>;
 export type TaskId = IdOf<'task'>;
 export type RunId = IdOf<'run'>;
+export type TurnId = IdOf<'turn'>;
 export type RouteId = IdOf<'route'>;
 export type ApprovalId = IdOf<'approval'>;
 export type IncidentId = IdOf<'incident'>;

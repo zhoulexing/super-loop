@@ -15,11 +15,24 @@ export const JOURNAL_EVENT_TYPES = [
   'envelope.rejected',
   // task
   'task.created',
+  'task.assigned',
+  'task.unassigned',
   'task.queued',
-  'task.cancelled',
-  'task.rejected',
-  'task.succeeded',
-  'task.dead',
+  'task.reprioritized',
+  'task.awaiting_input',
+  'task.failed',
+  'task.closed',
+  'task.reopened',
+  // turn（会话轮次）
+  'turn.added',
+  'turn.completed',
+  'turn.failed',
+  'turn.interrupted',
+  'turn.cancelled',
+  // routing（Router 插件自动分配）
+  'routing.requested',
+  'routing.decided',
+  'routing.failed',
   // run
   'run.started',
   'run.event',

@@ -41,6 +41,11 @@ export const DirectivesSchema = z.object({
   deadline: TimestampSchema.optional(),
   /** true 则不再匹配 Route，只用 directives。 */
   skipRoutes: z.boolean().optional(),
+  /**
+   * 本轮成功后直接关闭，不等待追问。
+   * 默认：手动提交（manual:api）保持会话，其它来源（定时、事件、派生）完成即关闭。
+   */
+  closeOnComplete: z.boolean().optional(),
 });
 export type Directives = z.infer<typeof DirectivesSchema>;
 

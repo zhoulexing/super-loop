@@ -45,10 +45,10 @@ export type HealthStatus = z.infer<typeof HealthStatusSchema>;
 /**
  * 文件引用。数据库只存逻辑地址，不存绝对路径，目录可以整体搬迁：
  * - 附件：`attachment:<YYYY-MM-DD>/<ULID>-<文件名>`
- * - 产物：`artifact:<runId>/<相对路径>`
+ * - 产物：`artifact:<taskId>/<runId>/<相对路径>`
  */
 export const FILE_REF_PATTERN =
-  /^(attachment:\d{4}-\d{2}-\d{2}\/[^/]+|artifact:run_[0-9A-HJKMNP-TV-Z]{26}\/.+)$/;
+  /^(attachment:\d{4}-\d{2}-\d{2}\/[^/]+|artifact:task_[0-9A-HJKMNP-TV-Z]{26}\/run_[0-9A-HJKMNP-TV-Z]{26}\/.+)$/;
 
 export const FileRefSchema = z.object({
   ref: z.string().regex(FILE_REF_PATTERN, 'invalid file ref'),
@@ -62,6 +62,7 @@ export const SubjectKindSchema = z.enum([
   'envelope',
   'task',
   'run',
+  'turn',
   'route',
   'approval',
   'incident',

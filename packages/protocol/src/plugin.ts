@@ -3,14 +3,15 @@ import type { AgentCapabilities, AgentEvent, AgentRunInput } from './agent.js';
 import type { ApprovalOutcome, ApprovalRequest } from './approval.js';
 import type { FileRef, HealthStatus, InstanceName } from './common.js';
 import type { EnvelopeDraft } from './envelope.js';
-import type { EnvelopeId, RunId } from './ids.js';
+import type { EnvelopeId, RunId, TaskId } from './ids.js';
+import type { RouterQueries, RouterRequest, RouterResult } from './routing.js';
 import type { DeliveryResult, Notification } from './sink.js';
 import type { Incident, ProbeSample, Remediation, RemediationAction } from './watchdog.js';
 
 /** 插件协议版本。内核据此判断插件是否兼容。 */
 export const PLUGIN_API_VERSION = 1;
 
-export const PluginKindSchema = z.enum(['source', 'agent', 'sink', 'probe', 'playbook']);
+export const PluginKindSchema = z.enum(['source', 'agent', 'sink', 'router', 'probe', 'playbook']);
 export type PluginKind = z.infer<typeof PluginKindSchema>;
 
 /**
@@ -78,26 +79,32 @@ export interface FileStore {
 }
 
 /** 内容存储（附件 + 产物），由宿主注入内核。默认实现见 @super-loop/host。 */
+/** 一次 Run 在工作区中的位置。 */
+export interface RunScope {
+  taskId: TaskId;
+  runId: RunId;
+}
+
 export interface ContentStore {
   readonly attachments: FileStore;
-  artifacts(runId: RunId): FileStore;
+  artifacts(scope: RunScope): FileStore;
   read(ref: string): Promise<Uint8Array>;
   /** 不存在返回 undefined。 */
   stat(ref: string): Promise<FileRef | undefined>;
   /** 列出某次 Run 的全部产物（含 Agent 直接写入 artifacts/ 的文件）。 */
-  listArtifacts(runId: RunId): Promise<FileRef[]>;
+  listArtifacts(scope: RunScope): Promise<FileRef[]>;
 }
 
 export interface RunWorkspace {
-  /** Agent 的工作目录（cwd）。 */
+  /** Agent 的工作目录（cwd），同一任务的所有 Run 共用：workspaces/<taskId>/work。 */
   work: string;
-  /** 交付结果目录，Run 结束时自动登记为产物。 */
+  /** 本次 Run 的交付结果目录 workspaces/<taskId>/artifacts/<runId>，Run 结束时自动登记为产物。 */
   artifacts: string;
 }
 
 /** 目录提供者，由宿主注入内核；不注入时 Run 没有工作区，插件也拿不到共享目录。 */
 export interface DirectoryProvider {
-  workspace(runId: RunId): Promise<RunWorkspace>;
+  workspace(scope: RunScope): Promise<RunWorkspace>;
   shared(): Promise<string>;
   state(instance: InstanceName): Promise<string>;
   cache(plugin: string): Promise<string>;
@@ -143,6 +150,7 @@ export interface SourceContext extends PluginContext {
 
 export interface AgentRunContext extends PluginContext {
   readonly runId: RunId;
+  readonly taskId: TaskId;
   readonly paths: RunPaths;
   /** Run 被取消或超时时触发（与实例级 signal 合并）。 */
   readonly signal: AbortSignal;
@@ -153,6 +161,12 @@ export interface AgentRunContext extends PluginContext {
 }
 
 export type SinkContext = PluginContext;
+
+export interface RouterContext extends PluginContext {
+  /** 本批被取消或超时时触发（与实例级 signal 合并）。 */
+  readonly signal: AbortSignal;
+  readonly query: RouterQueries;
+}
 
 // ─────────────────────────── 插件实现接口 ───────────────────────────
 
@@ -184,6 +198,15 @@ export interface SinkPlugin extends Disposable {
   health(): Promise<HealthStatus>;
 }
 
+/**
+ * Router：判断待分配的 Task 应该派给哪个 Agent（可以是 LLM / Agent 驱动）。
+ * 只返回决策，状态迁移由内核执行；同一实例同时只会收到一批。
+ */
+export interface RouterPlugin extends Disposable {
+  route(request: RouterRequest, ctx: RouterContext): Promise<RouterResult>;
+  health(): Promise<HealthStatus>;
+}
+
 /** @experimental M4 前可能调整。 */
 export interface ProbePlugin extends Disposable {
   readonly intervalMs: number;
@@ -208,6 +231,7 @@ export interface PluginInstanceMap {
   source: SourcePlugin;
   agent: AgentPlugin;
   sink: SinkPlugin;
+  router: RouterPlugin;
   probe: ProbePlugin;
   playbook: PlaybookPlugin;
 }

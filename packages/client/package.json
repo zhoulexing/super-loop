@@ -1,0 +1,25 @@
+{
+  "name": "@super-loop/client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Kernel HTTP API 的类型安全客户端（含 SSE 订阅），浏览器与 Node 通用",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@super-loop/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@super-loop/protocol": "workspace:*"
+  }
+}

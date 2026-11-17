@@ -63,7 +63,7 @@ export default defineAgentPlugin({
             return;
           }
           yield { type: 'message', role: 'assistant', content: input.prompt };
-          // 演示产物：写入 workspaces/<runId>/artifacts/echo.txt，并显式登记
+          // 演示产物：写入 workspaces/<taskId>/artifacts/<runId>/echo.txt，并显式登记
           const file = await runCtx.files.put(input.prompt, {
             name: 'echo.txt',
             mime: 'text/plain',

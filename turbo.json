@@ -10,7 +10,9 @@
     "SUPER_LOOP_PORT",
     "SUPER_LOOP_PUBLIC_URL",
     "SUPER_LOOP_API_TOKEN",
-    "SUPER_LOOP_LOG_LEVEL"
+    "SUPER_LOOP_LOG_LEVEL",
+    "SUPER_LOOP_DASHBOARD_DIR",
+    "SUPER_LOOP_API_URL"
   ],
   "tasks": {
     "build": {

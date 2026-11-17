@@ -12,7 +12,7 @@ export const DEFAULT_CONFIG = {
   },
   routes: [{ name: 'default-echo', agents: [{ agent: 'echo:default' }] }],
   defaults: {
-    // 任何结果至少在看板可见（AGENTS.md §7.4）
+    // 任何结果至少在看板可见（docs/plugins/README.md「Sink 插件」）
     sinks: [
       { sink: 'dashboard:default', on: ['started', 'succeeded', 'failed', 'approval_required'] },
     ],

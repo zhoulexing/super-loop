@@ -63,6 +63,9 @@ export const defineAgentPlugin = <S extends z.ZodType>(input: KindInput<'agent',
 export const defineSinkPlugin = <S extends z.ZodType>(input: KindInput<'sink', S>) =>
   definePlugin({ ...input, kind: 'sink' });
 
+export const defineRouterPlugin = <S extends z.ZodType>(input: KindInput<'router', S>) =>
+  definePlugin({ ...input, kind: 'router' });
+
 export const defineProbePlugin = <S extends z.ZodType>(input: KindInput<'probe', S>) =>
   definePlugin({ ...input, kind: 'probe' });
 

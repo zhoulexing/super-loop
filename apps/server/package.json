@@ -2,7 +2,7 @@
   "name": "@super-loop/server",
   "version": "0.0.0",
   "private": true,
-  "description": "\u5bbf\u4e3b\u8fdb\u7a0b\uff1a\u88c5\u914d\u5185\u6838\u3001\u5b58\u50a8\u4e0e\u63d2\u4ef6\uff0c\u63d0\u4f9b Kernel HTTP API",
+  "description": "宿主进程：装配内核、存储与插件，提供 Kernel HTTP API",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -12,19 +12,21 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@super-loop/protocol": "workspace:*",
-    "@super-loop/shared": "workspace:*",
-    "@super-loop/kernel": "workspace:*",
-    "@super-loop/store-sqlite": "workspace:*",
-    "@super-loop/agent-echo": "workspace:*",
-    "@super-loop/sink-dashboard": "workspace:*",
-    "hono": "catalog:",
     "@hono/node-server": "catalog:",
-    "zod": "catalog:",
-    "@super-loop/host": "workspace:*"
+    "@super-loop/agent-echo": "workspace:*",
+    "@super-loop/host": "workspace:*",
+    "@super-loop/kernel": "workspace:*",
+    "@super-loop/protocol": "workspace:*",
+    "@super-loop/router-dsh": "workspace:*",
+    "@super-loop/shared": "workspace:*",
+    "@super-loop/sink-dashboard": "workspace:*",
+    "@super-loop/store-sqlite": "workspace:*",
+    "hono": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@super-loop/testkit": "workspace:*",
-    "tsx": "catalog:"
+    "tsx": "catalog:",
+    "@super-loop/client": "workspace:*"
   }
 }

@@ -7,6 +7,9 @@ import type {
   DeliveryResult,
   Notification,
   PluginDefinition,
+  RouterContext,
+  RouterRequest,
+  RouterResult,
   SourceContext,
 } from '@super-loop/protocol';
 import { z } from 'zod';
@@ -24,15 +27,41 @@ const healthy = async () => ({ status: 'healthy' as const, checkedAt: new Date()
 /** 用一个函数快速定义测试 Agent。 */
 export function defineTestAgent(
   run: (input: AgentRunInput, ctx: AgentRunContext) => AsyncIterable<AgentEvent>,
-  options: { name?: string } = {},
+  options: { name?: string; capabilities?: Partial<AgentCapabilities> } = {},
 ): PluginDefinition<'agent', unknown> {
   return definePlugin({
     name: options.name ?? 'agent-test',
     version: '0.0.0',
     kind: 'agent',
     configSchema: z.unknown(),
-    create: () => ({ capabilities: CAPABILITIES, run, health: healthy }),
+    create: () => ({
+      capabilities: { ...CAPABILITIES, ...options.capabilities },
+      run,
+      health: healthy,
+    }),
   });
+}
+
+/** 测试 Router：`route` 决定每批的结果；`requests` 记录收到的每一批。 */
+export function defineTestRouter(
+  route: (request: RouterRequest, ctx: RouterContext) => RouterResult | Promise<RouterResult>,
+  options: { name?: string } = {},
+): PluginDefinition<'router', unknown> & { readonly requests: RouterRequest[] } {
+  const requests: RouterRequest[] = [];
+  const def = definePlugin({
+    name: options.name ?? 'router-test',
+    version: '0.0.0',
+    kind: 'router',
+    configSchema: z.unknown(),
+    create: () => ({
+      async route(request: RouterRequest, ctx: RouterContext) {
+        requests.push(request);
+        return route(request, ctx);
+      },
+      health: healthy,
+    }),
+  });
+  return { ...def, requests };
 }
 
 /** 记录所有通知的测试 Sink；`deliver` 可自定义结果。 */

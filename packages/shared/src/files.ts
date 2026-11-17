@@ -1,4 +1,11 @@
-import type { ContentStore, FileRef, FileStore, RunId } from '@super-loop/protocol';
+import type {
+  ContentStore,
+  FileRef,
+  FileStore,
+  RunId,
+  RunScope,
+  TaskId,
+} from '@super-loop/protocol';
 import { ErrorCode, LoopError } from './errors.js';
 import { newId } from './id.js';
 
@@ -29,10 +36,10 @@ export function withSuffix(name: string, n: number): string {
 
 export type ParsedFileRef =
   | { kind: 'attachment'; date: string; file: string }
-  | { kind: 'artifact'; runId: RunId; path: string };
+  | { kind: 'artifact'; taskId: TaskId; runId: RunId; path: string };
 
 const ATTACHMENT = /^attachment:(\d{4}-\d{2}-\d{2})\/([^/]+)$/;
-const ARTIFACT = /^artifact:(run_[0-9A-HJKMNP-TV-Z]{26})\/(.+)$/;
+const ARTIFACT = /^artifact:(task_[0-9A-HJKMNP-TV-Z]{26})\/(run_[0-9A-HJKMNP-TV-Z]{26})\/(.+)$/;
 
 /** 解析文件引用；含 `..`、空段或绝对路径的引用一律视为非法（防路径穿越）。 */
 export function parseFileRef(ref: string): ParsedFileRef {
@@ -42,9 +49,14 @@ export function parseFileRef(ref: string): ParsedFileRef {
   }
   const b = ARTIFACT.exec(ref);
   if (b) {
-    const segments = (b[2] as string).split('/');
+    const segments = (b[3] as string).split('/');
     if (segments.every((s) => s !== '' && s !== '.' && s !== '..')) {
-      return { kind: 'artifact', runId: b[1] as RunId, path: b[2] as string };
+      return {
+        kind: 'artifact',
+        taskId: b[1] as TaskId,
+        runId: b[2] as RunId,
+        path: b[3] as string,
+      };
     }
   }
   throw new LoopError(ErrorCode.INVALID_INPUT, `invalid file ref: ${ref}`, { retryable: false });
@@ -94,6 +106,11 @@ export function assertFileSize(size: number, maxBytes: number | undefined, name:
   }
 }
 
+/** 某次 Run 的产物引用前缀：`artifact:<taskId>/<runId>/`。 */
+export function artifactPrefix(scope: RunScope): string {
+  return `artifact:${scope.taskId}/${scope.runId}/`;
+}
+
 /**
  * 内存版 ContentStore：内核默认值与测试使用，引用格式与文件版一致。
  * 不提供目录（Run 没有工作区）。
@@ -133,14 +150,15 @@ export function createMemoryContentStore(
 
   return {
     attachments,
-    artifacts(runId) {
+    artifacts(scope) {
+      const prefix = artifactPrefix(scope);
       return {
         async put(data, meta) {
           const base = sanitizeFileName(meta.name);
           let n = 0;
-          while (files.has(`artifact:${runId}/${withSuffix(base, n)}`)) n++;
+          while (files.has(`${prefix}${withSuffix(base, n)}`)) n++;
           const name = withSuffix(base, n);
-          return save(`artifact:${runId}/${name}`, name, meta.mime, toBytes(data));
+          return save(`${prefix}${name}`, name, meta.mime, toBytes(data));
         },
         get: read,
       };
@@ -153,8 +171,8 @@ export function createMemoryContentStore(
       const { data: _data, ...meta } = f;
       return meta;
     },
-    async listArtifacts(runId) {
-      const prefix = `artifact:${runId}/`;
+    async listArtifacts(scope) {
+      const prefix = artifactPrefix(scope);
       return [...files.values()]
         .filter((f) => f.ref.startsWith(prefix))
         .map(({ data: _data, ...meta }) => meta)

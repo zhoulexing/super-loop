@@ -2,23 +2,34 @@ import { type Kernel, pluginKvNamespace } from '@super-loop/kernel';
 import {
   type Actor,
   ApprovalStatusSchema,
+  AssignTaskSchema,
+  CloseTaskSchema,
+  DecideApprovalSchema,
   DeliveryStatusSchema,
-  EnvelopeDraftSchema,
   EnvelopeKindSchema,
+  type InboxItem,
   type JournalEvent,
+  RetryTaskSchema,
+  SendMessageSchema,
+  SubmitEnvelopeSchema,
+  type TaskId,
   TaskStatusSchema,
+  UpdateTaskSchema,
 } from '@super-loop/protocol';
 import { ErrorCode, isId, isLoopError, LoopError, newId } from '@super-loop/shared';
-import { INBOX_PREFIX, type InboxItem } from '@super-loop/sink-dashboard';
+import { INBOX_PREFIX } from '@super-loop/sink-dashboard';
 import { type Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { z } from 'zod';
+import type { z } from 'zod';
+import { serveDashboard } from './static.js';
 
 export interface AppOptions {
   kernel: Kernel;
   /** 设置后所有 /api 请求（除 health）需要 `Authorization: Bearer <token>`。 */
   token?: string | undefined;
+  /** 看板构建产物目录；提供时在 `/` 托管看板。 */
+  dashboardDir?: string | undefined;
 }
 
 const STATUS_BY_CODE: Record<string, ContentfulStatusCode> = {
@@ -30,17 +41,22 @@ const STATUS_BY_CODE: Record<string, ContentfulStatusCode> = {
   [ErrorCode.UNAVAILABLE]: 503,
 };
 
-/** API 提交时 kind / idempotencyKey / payload 可省略。 */
-const SubmitSchema = EnvelopeDraftSchema.extend({
-  kind: EnvelopeKindSchema.default('task'),
-  idempotencyKey: z.string().min(1).optional(),
-  payload: z.unknown().optional(),
-});
+function parse<T>(schema: z.ZodType<T>, value: unknown, what: string): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) badRequest(`invalid ${what}`, { issues: parsed.error.issues });
+  return parsed.data;
+}
 
-const DecisionSchema = z.object({
-  decision: z.enum(['grant', 'reject']),
-  comment: z.string().max(2_000).optional(),
-});
+/** 可选 JSON 请求体：空 body 视为 {}。 */
+async function optionalJson(c: Context): Promise<unknown> {
+  const text = await c.req.text();
+  if (text.trim() === '') return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return badRequest('request body must be JSON');
+  }
+}
 
 function badRequest(message: string, details?: Record<string, unknown>): never {
   throw new LoopError(ErrorCode.INVALID_INPUT, message, {
@@ -87,8 +103,8 @@ function actorOf(c: Context): Actor {
   return `user:${user}`;
 }
 
-/** Kernel HTTP API v1（AGENTS.md §10.1）。只增不改，破坏性变更走 /api/v2。 */
-export function createApp({ kernel, token }: AppOptions): Hono {
+/** Kernel HTTP API v1（docs/dashboard-api.md）。只增不改，破坏性变更走 /api/v2。 */
+export function createApp({ kernel, token, dashboardDir }: AppOptions): Hono {
   const { store } = kernel;
   const app = new Hono();
 
@@ -129,6 +145,7 @@ export function createApp({ kernel, token }: AppOptions): Hono {
       status: kernel.state === 'running' ? 'ok' : 'degraded',
       kernel: kernel.state,
       activeRuns: kernel.activeRuns,
+      concurrency: kernel.config.limits.globalConcurrency,
       latestSeq: await store.latestSeq(),
       plugins: kernel.plugins.list(),
     }),
@@ -148,7 +165,7 @@ export function createApp({ kernel, token }: AppOptions): Hono {
   // ─────────────────────────── Envelope ───────────────────────────
 
   api.post('/envelopes', async (c) => {
-    const parsed = SubmitSchema.safeParse(await json(c));
+    const parsed = SubmitEnvelopeSchema.safeParse(await json(c));
     if (!parsed.success) badRequest('invalid envelope', { issues: parsed.error.issues });
     const { idempotencyKey, payload, ...rest } = parsed.data;
     const result = await kernel.submit(
@@ -183,32 +200,122 @@ export function createApp({ kernel, token }: AppOptions): Hono {
 
   // ─────────────────────────── Task / Run ───────────────────────────
 
+  /** `?status=queued,running` 支持逗号分隔的多个状态。 */
   api.get('/tasks', async (c) => {
-    const status = enumQuery(c, 'status', TaskStatusSchema);
+    const raw = c.req.query('status');
+    const statuses = raw
+      ? raw.split(',').map((s) => parse(TaskStatusSchema, s.trim(), `status: ${s}`))
+      : undefined;
     return c.json(
       await store.tasks.list({
         ...page(c),
         order: 'desc',
-        ...(status ? { where: { status } } : {}),
+        ...(statuses ? { where: { status: statuses } } : {}),
       }),
     );
   });
 
-  api.get('/tasks/:id', async (c) => {
+  const taskIdOf = (c: Context): TaskId => {
     const id = c.req.param('id');
-    const task = isId('task', id) ? await store.tasks.get(id) : undefined;
+    if (!id || !isId('task', id)) notFound('task');
+    return id;
+  };
+
+  api.get('/tasks/:id', async (c) => {
+    const id = taskIdOf(c);
+    const task = await store.tasks.get(id);
     if (!task) notFound('task');
-    const [envelope, runs] = await Promise.all([
+    const [envelope, runs, turns] = await Promise.all([
       store.envelopes.get(task.envelopeId),
-      store.runs.list({ where: { taskId: task.id }, limit: 100 }),
+      store.runs.list({ where: { taskId: task.id }, limit: 500 }),
+      store.turns.list({ where: { taskId: task.id }, limit: 500 }),
     ]);
-    return c.json({ task, envelope, runs: runs.items });
+    return c.json({
+      task,
+      envelope,
+      runs: runs.items,
+      turns: turns.items.sort((a, b) => a.index - b.index),
+    });
   });
 
+  api.patch('/tasks/:id', async (c) => {
+    const body = parse(UpdateTaskSchema, await json(c), 'task patch');
+    const task = await kernel.reprioritizeTask(
+      taskIdOf(c),
+      {
+        ...(body.priority === undefined ? {} : { priority: body.priority }),
+        ...(body.rank === undefined ? {} : { rank: body.rank }),
+      },
+      actorOf(c),
+    );
+    return c.json(task);
+  });
+
+  api.get('/tasks/:id/turns', async (c) => {
+    const { items } = await store.turns.list({ where: { taskId: taskIdOf(c) }, limit: 500 });
+    return c.json({ items: items.sort((a, b) => a.index - b.index) });
+  });
+
+  /** 追问 / 继续对话：`{ content, mode?: 'queue' | 'interrupt', attachments? }`。 */
+  api.post('/tasks/:id/messages', async (c) => {
+    const body = parse(SendMessageSchema, await json(c), 'message');
+    const turn = await kernel.sendMessage(
+      taskIdOf(c),
+      {
+        content: body.content,
+        mode: body.mode,
+        ...(body.attachments ? { attachments: body.attachments } : {}),
+      },
+      actorOf(c),
+    );
+    return c.json(turn, 201);
+  });
+
+  api.post('/tasks/:id/assign', async (c) => {
+    const body = parse(AssignTaskSchema, await json(c), 'assignment');
+    const task = await kernel.assignTask(
+      taskIdOf(c),
+      {
+        agent: body.agent,
+        ...(body.prompt === undefined ? {} : { prompt: body.prompt }),
+        ...(body.options === undefined ? {} : { options: body.options }),
+      },
+      actorOf(c),
+    );
+    return c.json(task);
+  });
+
+  api.post('/tasks/:id/unassign', async (c) =>
+    c.json(await kernel.unassignTask(taskIdOf(c), actorOf(c))),
+  );
+
+  api.post('/tasks/:id/retry', async (c) => {
+    const body = parse(RetryTaskSchema, await optionalJson(c), 'retry');
+    const task = await kernel.retryTask(
+      taskIdOf(c),
+      actorOf(c),
+      body.agent ? { agent: body.agent } : {},
+    );
+    return c.json(task);
+  });
+
+  api.post('/tasks/:id/close', async (c) => {
+    const body = parse(CloseTaskSchema, await optionalJson(c), 'close');
+    const task = await kernel.closeTask(
+      taskIdOf(c),
+      actorOf(c),
+      body.reason ? { reason: body.reason } : {},
+    );
+    return c.json(task);
+  });
+
+  api.post('/tasks/:id/reopen', async (c) =>
+    c.json(await kernel.reopenTask(taskIdOf(c), actorOf(c))),
+  );
+
+  /** 兼容：等同于 close。 */
   api.post('/tasks/:id/cancel', async (c) => {
-    const id = c.req.param('id');
-    if (!isId('task', id)) notFound('task');
-    await kernel.cancelTask(id, actorOf(c));
+    await kernel.closeTask(taskIdOf(c), actorOf(c));
     return c.json({ ok: true }, 202);
   });
 
@@ -236,7 +343,7 @@ export function createApp({ kernel, token }: AppOptions): Hono {
   api.post('/approvals/:id/decision', async (c) => {
     const id = c.req.param('id');
     if (!isId('approval', id)) notFound('approval');
-    const parsed = DecisionSchema.safeParse(await json(c));
+    const parsed = DecideApprovalSchema.safeParse(await json(c));
     if (!parsed.success) badRequest('invalid decision', { issues: parsed.error.issues });
     const approval = await kernel.decideApproval(id, {
       decision: parsed.data.decision,
@@ -274,7 +381,23 @@ export function createApp({ kernel, token }: AppOptions): Hono {
 
   // ─────────────────────────── 文件 ───────────────────────────
 
-  /** 下载附件或产物：`GET /files?ref=artifact:run_xxx/report.md`。不存在返回 404。 */
+  /**
+   * 上传附件（追问时附带）：请求体为文件原始字节，`?name=` 为文件名，content-type 为 MIME。
+   * 返回 FileRef，可放进 `POST /tasks/:id/messages` 的 attachments 或 Envelope.attachments。
+   */
+  api.post('/files', async (c) => {
+    const name = c.req.query('name');
+    if (!name) badRequest('name is required');
+    const data = new Uint8Array(await c.req.arrayBuffer());
+    const mime = c.req.header('content-type')?.split(';')[0]?.trim();
+    const ref = await kernel.content.attachments.put(data, {
+      name,
+      ...(mime && mime !== 'application/octet-stream' ? { mime } : {}),
+    });
+    return c.json(ref, 201);
+  });
+
+  /** 下载附件或产物：`GET /files?ref=artifact:task_xxx/run_xxx/report.md`。不存在返回 404。 */
   api.get('/files', async (c) => {
     const ref = c.req.query('ref');
     if (!ref) badRequest('ref is required');
@@ -358,5 +481,6 @@ export function createApp({ kernel, token }: AppOptions): Hono {
   });
 
   app.route('/api/v1', api);
+  if (dashboardDir) app.use('*', serveDashboard(dashboardDir));
   return app;
 }

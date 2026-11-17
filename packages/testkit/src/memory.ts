@@ -20,6 +20,7 @@ import type {
   Store,
   StoreTx,
   Task,
+  Turn,
 } from '@super-loop/protocol';
 import { systemClock } from '@super-loop/shared';
 
@@ -69,6 +70,7 @@ type RepoName =
   | 'envelopes'
   | 'tasks'
   | 'runs'
+  | 'turns'
   | 'routes'
   | 'approvals'
   | 'deliveries'
@@ -79,6 +81,7 @@ const REPO_NAMES: readonly RepoName[] = [
   'envelopes',
   'tasks',
   'runs',
+  'turns',
   'routes',
   'approvals',
   'deliveries',
@@ -149,6 +152,7 @@ export class MemoryStore implements Store {
   readonly envelopes: EnvelopeRepo;
   readonly tasks: Repo<Task>;
   readonly runs: Repo<Run>;
+  readonly turns: Repo<Turn>;
   readonly routes: Repo<Route>;
   readonly approvals: Repo<Approval>;
   readonly deliveries: Repo<Delivery>;
@@ -174,6 +178,7 @@ export class MemoryStore implements Store {
     };
     this.tasks = makeRepo<Task>(table('tasks'));
     this.runs = makeRepo<Run>(table('runs'));
+    this.turns = makeRepo<Turn>(table('turns'));
     this.routes = makeRepo<Route>(table('routes'));
     this.approvals = makeRepo<Approval>(table('approvals'));
     this.deliveries = makeRepo<Delivery>(table('deliveries'));

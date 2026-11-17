@@ -22,6 +22,7 @@ import type {
   Store,
   StoreTx,
   Task,
+  Turn,
 } from '@super-loop/protocol';
 import { ErrorCode, LoopError, systemClock } from '@super-loop/shared';
 
@@ -62,12 +63,18 @@ const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (namespace, key)
   ) WITHOUT ROWID;
   `,
+  // v2：按任务查询 Run / Turn
+  `
+  CREATE INDEX entities_task ON entities (collection, json_extract(data, '$.taskId'))
+    WHERE collection IN ('runs', 'turns');
+  `,
 ];
 
 type Collection =
   | 'envelopes'
   | 'tasks'
   | 'runs'
+  | 'turns'
   | 'routes'
   | 'approvals'
   | 'deliveries'
@@ -107,6 +114,7 @@ export class SqliteStore implements Store {
   readonly envelopes: EnvelopeRepo;
   readonly tasks: Repo<Task>;
   readonly runs: Repo<Run>;
+  readonly turns: Repo<Turn>;
   readonly routes: Repo<Route>;
   readonly approvals: Repo<Approval>;
   readonly deliveries: Repo<Delivery>;
@@ -128,6 +136,7 @@ export class SqliteStore implements Store {
       envelopes: this.#envelopeRepo(false),
       tasks: this.#repo<Task>('tasks', false),
       runs: this.#repo<Run>('runs', false),
+      turns: this.#repo<Turn>('turns', false),
       routes: this.#repo<Route>('routes', false),
       approvals: this.#repo<Approval>('approvals', false),
       deliveries: this.#repo<Delivery>('deliveries', false),
@@ -138,6 +147,7 @@ export class SqliteStore implements Store {
     this.envelopes = this.#envelopeRepo(true);
     this.tasks = this.#repo<Task>('tasks', true);
     this.runs = this.#repo<Run>('runs', true);
+    this.turns = this.#repo<Turn>('turns', true);
     this.routes = this.#repo<Route>('routes', true);
     this.approvals = this.#repo<Approval>('approvals', true);
     this.deliveries = this.#repo<Delivery>('deliveries', true);

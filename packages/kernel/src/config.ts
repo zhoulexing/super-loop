@@ -1,8 +1,10 @@
 import {
   AgentBindingSchema,
+  AssignModeSchema,
   BackoffSchema,
   DEFAULT_PRIORITY,
   DEFAULT_TASK_POLICY,
+  InstanceNameSchema,
   type PluginDefinition,
   type PluginKind,
   PrioritySchema,
@@ -10,6 +12,7 @@ import {
   SinkBindingSchema,
   type TaskPolicy,
   TaskPolicySchema,
+  UnroutedPolicySchema,
 } from '@super-loop/protocol';
 import { ErrorCode, interpolateRefs, LoopError } from '@super-loop/shared';
 import { z } from 'zod';
@@ -27,6 +30,8 @@ export const PluginInstanceConfigSchema = z.object({
   use: PluginDefinitionSchema,
   config: z.unknown().optional(),
   enabled: z.boolean().default(true),
+  /** 这个实例是做什么的；Router 据此判断把任务派给哪个 Agent。 */
+  description: z.string().max(1000).optional(),
 });
 
 export const RouteConfigSchema = z.object({
@@ -34,9 +39,14 @@ export const RouteConfigSchema = z.object({
   enabled: z.boolean().default(true),
   order: z.number().int().optional(),
   match: RouteMatchSchema.default({}),
-  agents: z.array(AgentBindingSchema).min(1),
+  /** auto：直接派给 agents；manual：进入"未分配"，agents 作为候选；router：交给 Router 插件判断。 */
+  assign: AssignModeSchema.default('auto'),
+  agents: z.array(AgentBindingSchema).default([]),
+  /** assign 为 router 时使用的 Router 实例，不填用 defaults.router。 */
+  router: InstanceNameSchema.optional(),
   sinks: z.array(SinkBindingSchema).default([]),
   policy: TaskPolicySchema.partial().default({}),
+  closeOnComplete: z.boolean().optional(),
   stopOnMatch: z.boolean().default(true),
 });
 export type RouteConfig = z.input<typeof RouteConfigSchema>;
@@ -53,6 +63,10 @@ export const KernelConfigSchema = z.object({
       priority: PrioritySchema.default(DEFAULT_PRIORITY),
       /** 对所有 Task 生效的通知绑定（例如看板收件箱）。 */
       sinks: z.array(SinkBindingSchema).default([]),
+      /** 没有匹配到 Route 的消息：triage 进入"未分配"等人处理，drop 只记录。 */
+      unrouted: UnroutedPolicySchema.default('triage'),
+      /** 默认的 Router 插件实例（unrouted 为 router、或 Route 的 assign 为 router 时使用）。 */
+      router: InstanceNameSchema.optional(),
     })
     .prefault({}),
   limits: z
@@ -72,6 +86,25 @@ export const KernelConfigSchema = z.object({
       /** 插件连续崩溃多少次后自动禁用。 */
       maxPluginCrashes: z.number().int().positive().default(5),
       pluginCallTimeoutMs: z.number().int().positive().default(30_000),
+      /** awaiting_input 空闲多久自动关闭，0 表示不自动关闭。默认 7 天。 */
+      idleCloseMs: z
+        .number()
+        .int()
+        .nonnegative()
+        .default(7 * 24 * 3_600_000),
+      /** 传给 Agent 的会话历史最多包含多少轮。 */
+      maxHistoryTurns: z.number().int().nonnegative().default(20),
+      routing: z
+        .object({
+          /** 每批最多交给 Router 多少个 Task。 */
+          batchSize: z.number().int().positive().max(50).default(10),
+          /** 一批的超时。 */
+          timeoutMs: z.number().int().positive().default(120_000),
+          /** 每个 Task 最多交给 Router 几次，之后留在"未分配"等人处理。 */
+          maxAttempts: z.number().int().positive().default(3),
+          backoff: BackoffSchema.default({ type: 'exponential', baseMs: 5_000, maxMs: 120_000 }),
+        })
+        .prefault({}),
       delivery: z
         .object({
           maxAttempts: z.number().int().positive().default(5),

@@ -62,7 +62,7 @@ describe('Kernel API', () => {
 
     const task = await waitFor(async () => {
       const r = await call('GET', `/tasks/${taskId}`);
-      return (r.body.task as { status: string }).status === 'succeeded' ? r.body : undefined;
+      return (r.body.task as { status: string }).status === 'awaiting_input' ? r.body : undefined;
     });
     const run = (task.runs as Array<{ id: string; summary: string }>)[0];
     expect(run?.summary).toMatch(/^echoed/);
@@ -98,6 +98,74 @@ describe('Kernel API', () => {
       `/journal?traceId=${(task.task as { traceId: string }).traceId}`,
     );
     expect((journal.body.items as Array<{ actor: string }>)[0]?.actor).toBe('user:alice');
+  });
+
+  it('会话接口：追问、上传附件、关闭 / 重新打开、调整顺序、未分配任务的分配', async () => {
+    const { call, app } = await boot();
+    const { body } = await call('POST', '/envelopes', { subject: 'q1' });
+    const taskId = (
+      (await call('GET', `/envelopes/${body.envelopeId}`)).body.tasks as Array<{ id: string }>
+    )[0]?.id as string;
+    const statusOf = async () =>
+      ((await call('GET', `/tasks/${taskId}`)).body.task as { status: string }).status;
+    await waitFor(async () => (await statusOf()) === 'awaiting_input');
+
+    // 上传附件后随追问一起发送
+    const up = await app.request('/api/v1/files?name=notes.md', {
+      method: 'POST',
+      headers: { 'content-type': 'text/markdown' },
+      body: '# notes',
+    });
+    expect(up.status).toBe(201);
+    const file = (await up.json()) as { ref: string; mime: string };
+    expect(file.mime).toBe('text/markdown');
+
+    const msg = await call('POST', `/tasks/${taskId}/messages`, {
+      content: 'q2',
+      attachments: [file],
+    });
+    expect(msg.status).toBe(201);
+    expect(msg.body).toMatchObject({ index: 2, content: 'q2' });
+    await waitFor(async () => {
+      const d = (await call('GET', `/tasks/${taskId}`)).body;
+      const turns = d.turns as Array<{ status: string }>;
+      return turns.length === 2 && turns.every((t) => t.status === 'completed') ? d : undefined;
+    });
+    expect((await call('POST', `/tasks/${taskId}/messages`, { content: '' })).status).toBe(400);
+
+    expect((await call('PATCH', `/tasks/${taskId}`, { priority: 0, rank: 1 })).body).toMatchObject({
+      priority: 0,
+      rank: 1,
+    });
+    expect((await call('PATCH', `/tasks/${taskId}`, {})).status).toBe(400);
+
+    expect((await call('POST', `/tasks/${taskId}/close`)).body).toMatchObject({
+      status: 'closed',
+      outcome: 'succeeded',
+    });
+    expect((await call('POST', `/tasks/${taskId}/close`)).status).toBe(409);
+    expect((await call('GET', '/tasks?status=closed,failed')).body.items).toHaveLength(1);
+    expect((await call('GET', '/tasks?status=closed,bogus')).status).toBe(400);
+    expect((await call('POST', `/tasks/${taskId}/reopen`)).body).toMatchObject({
+      status: 'awaiting_input',
+    });
+
+    // 跳过路由 → 未分配 → 分配
+    const t = await call('POST', '/envelopes', {
+      subject: 'triage me',
+      directives: { skipRoutes: true },
+    });
+    const tid = (
+      (await call('GET', `/envelopes/${t.body.envelopeId}`)).body.tasks as Array<{
+        id: string;
+        status: string;
+      }>
+    )[0];
+    expect(tid?.status).toBe('unassigned');
+    expect((await call('POST', `/tasks/${tid?.id}/assign`, { agent: 'nope:x' })).status).toBe(400);
+    expect(
+      (await call('POST', `/tasks/${tid?.id}/assign`, { agent: 'echo:default' })).body,
+    ).toMatchObject({ status: 'queued', agent: { agent: 'echo:default' } });
   });
 
   it('幂等提交返回 200 + duplicated', async () => {

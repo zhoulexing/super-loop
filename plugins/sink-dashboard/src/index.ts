@@ -2,15 +2,12 @@
  * sink-dashboard：把通知写入看板收件箱（插件私有 KV 的 `inbox/` 前缀下）。
  * 看板 / API 通过 `GET /api/v1/notifications?sink=<instance>` 读取。
  */
-import { defineSinkPlugin, healthy, type Notification } from '@super-loop/plugin-sdk';
+import { defineSinkPlugin, healthy, type InboxItem } from '@super-loop/plugin-sdk';
 import { z } from 'zod';
 
-export const INBOX_PREFIX = 'inbox/';
+export type { InboxItem } from '@super-loop/plugin-sdk';
 
-export interface InboxItem extends Notification {
-  receivedAt: string;
-  read: boolean;
-}
+export const INBOX_PREFIX = 'inbox/';
 
 const ConfigSchema = z.object({
   /** 收件箱最多保留条数，超出后删除最旧的。 */

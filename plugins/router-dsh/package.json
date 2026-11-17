@@ -1,0 +1,34 @@
+{
+  "name": "@super-loop/router-dsh",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Router 插件：用 DeepSeek Harness（dsh-sdk-client）驱动一个长驻、可恢复的路由会话，把消息分派给合适的 Agent",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@super-loop/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "profile"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-sdk-client": "0.2.2-rc.1",
+    "@super-loop/plugin-sdk": "workspace:*",
+    "@super-loop/protocol": "workspace:*",
+    "@super-loop/shared": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@super-loop/testkit": "workspace:*"
+  }
+}

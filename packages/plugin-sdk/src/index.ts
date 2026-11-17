@@ -5,6 +5,7 @@ export {
   EnvelopeDraftSchema,
   NotificationSchema,
   PLUGIN_API_VERSION,
+  RouteDecisionSchema,
 } from '@super-loop/protocol';
 export { ErrorCode, LoopError, renderTemplate, sleep, withTimeout } from '@super-loop/shared';
 export * from './agent.js';

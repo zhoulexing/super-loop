@@ -27,6 +27,8 @@ const RULES: Record<string, string[] | '*'> = {
   testkit: ['protocol', 'shared', 'plugin-sdk'],
   kernel: ['protocol', 'shared'],
   host: ['protocol', 'shared'],
+  // 浏览器也要用：只依赖 protocol 的类型，不引入 shared（pino 等 Node 依赖）
+  client: ['protocol'],
   'store-*': ['protocol', 'shared'],
   'plugins/*': ['protocol', 'shared', 'plugin-sdk'],
   'apps/watchdog': ['protocol', 'shared', 'plugin-sdk'],

@@ -5,7 +5,6 @@ import {
   EnvelopeDraftSchema,
   EnvelopeSchema,
   InstanceNameSchema,
-  isTerminalTaskStatus,
   JOURNAL_EVENT_TYPES,
   PluginManifestSchema,
   TASK_TRANSITIONS,
@@ -51,16 +50,19 @@ describe('task state machine', () => {
     for (const status of TaskStatusSchema.options) expect(TASK_TRANSITIONS[status]).toBeDefined();
   });
 
-  it('终态没有出边，非终态都能取消', () => {
+  it('除 closed 外都能关闭，closed 只能重新打开', () => {
     for (const status of TaskStatusSchema.options) {
-      if (isTerminalTaskStatus(status)) expect(TASK_TRANSITIONS[status]).toHaveLength(0);
-      else expect(canTransitionTask(status, 'cancelled')).toBe(true);
+      if (status === 'closed') continue;
+      expect(canTransitionTask(status, 'closed')).toBe(true);
     }
+    expect(TASK_TRANSITIONS.closed).toEqual(['awaiting_input', 'unassigned']);
   });
 
-  it('失败重试回到 queued，不能跳过 running 直接成功', () => {
+  it('失败重试回到 queued；未分配不能直接执行；追问从 awaiting_input 回到 queued', () => {
     expect(canTransitionTask('running', 'queued')).toBe(true);
-    expect(canTransitionTask('queued', 'succeeded')).toBe(false);
+    expect(canTransitionTask('unassigned', 'running')).toBe(false);
+    expect(canTransitionTask('awaiting_input', 'queued')).toBe(true);
+    expect(canTransitionTask('failed', 'queued')).toBe(true);
   });
 });
 

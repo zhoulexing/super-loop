@@ -21,7 +21,9 @@ export function makeAgentRunInput(overrides: Partial<AgentRunInput> = {}): Agent
     taskId: newId('task'),
     attempt: 1,
     envelope: makeEnvelope(),
+    turn: { id: newId('turn'), index: 1 },
     prompt: 'say hello',
+    history: [],
     options: {},
     ...overrides,
   };

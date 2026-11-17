@@ -1,0 +1,27 @@
+{
+  "name": "@super-loop/dashboard",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Web 看板：七列状态看板 + 对话抽屉，通过 @super-loop/client 访问 Kernel API",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@super-loop/client": "workspace:*",
+    "@super-loop/protocol": "workspace:*",
+    "@tanstack/react-query": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "vite": "catalog:"
+  }
+}

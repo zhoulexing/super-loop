@@ -54,7 +54,7 @@ export function buildNotification(
   const lines = [
     `**${c.envelope.subject}**`,
     '',
-    `- Agent：\`${c.task.agent.agent}\``,
+    `- Agent：\`${c.task.agent?.agent ?? '未分配'}\``,
     `- 尝试：${c.task.attempts}/${c.task.policy.maxAttempts}`,
   ];
   if (c.summary) lines.push(`- 结果：${c.summary}`);

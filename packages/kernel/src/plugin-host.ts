@@ -13,9 +13,15 @@ import {
   PLUGIN_API_VERSION,
   type PluginContext,
   type PluginDefinition,
+  type PluginInfo,
   type PluginInstanceMap,
   type PluginKind,
   type PluginPaths,
+  type PluginStatus,
+  type RouterAgentInfo,
+  type RouterContext,
+  type RouterPlugin,
+  type RouterQueries,
   type RunWorkspace,
   type SecretResolver,
   type SinkPlugin,
@@ -25,17 +31,7 @@ import {
 import { ErrorCode, LoopError, toLoopError, withTimeout } from '@super-loop/shared';
 import { interpolateEnv, type KernelConfig } from './config.js';
 
-export type PluginStatus = 'ready' | 'disabled' | 'failed';
-
-export interface PluginInfo {
-  instance: InstanceName;
-  plugin: string;
-  version: string;
-  kind: PluginKind;
-  status: PluginStatus;
-  crashes: number;
-  error?: string;
-}
+export type { PluginInfo, PluginStatus } from '@super-loop/protocol';
 
 interface Entry {
   instance: InstanceName;
@@ -46,6 +42,7 @@ interface Entry {
   controller: AbortController;
   crashes: number;
   error?: string;
+  description?: string;
 }
 
 export type Lookup<T> =
@@ -77,6 +74,7 @@ const REQUIRED_METHODS: Record<PluginKind, string[]> = {
   source: ['start', 'stop', 'health'],
   agent: ['run', 'health'],
   sink: ['deliver', 'health'],
+  router: ['route', 'health'],
   probe: ['collect'],
   playbook: ['propose', 'execute'],
 };
@@ -125,6 +123,7 @@ export class PluginHost {
         status: spec.enabled ? 'ready' : 'disabled',
         controller: new AbortController(),
         crashes: 0,
+        ...(spec.description === undefined ? {} : { description: spec.description }),
       };
       this.#entries.set(instance, entry);
       if (!spec.enabled) continue;
@@ -213,6 +212,41 @@ export class PluginHost {
     return this.#lookup(instance, 'sink');
   }
 
+  router(instance: string): Lookup<RouterPlugin> {
+    return this.#lookup(instance, 'router');
+  }
+
+  /** 交给 Router 的可用 Agent 列表（只含已就绪的实例）。 */
+  routableAgents(): RouterAgentInfo[] {
+    const out: RouterAgentInfo[] = [];
+    for (const e of this.#entries.values()) {
+      if (e.def.kind !== 'agent' || e.status !== 'ready' || !e.impl) continue;
+      out.push({
+        instance: e.instance,
+        plugin: e.def.name,
+        capabilities: (e.impl as AgentPlugin).capabilities,
+        ...(e.description === undefined ? {} : { description: e.description }),
+      });
+    }
+    return out;
+  }
+
+  /** 构造一批路由的上下文：signal 同时受实例停止与本批取消控制。 */
+  routerContext(
+    instance: InstanceName,
+    extra: { signal: AbortSignal; query: RouterQueries; batchId: string },
+  ): RouterContext {
+    const entry = this.#entries.get(instance);
+    if (!entry?.ctx)
+      throw new LoopError(ErrorCode.PLUGIN_NOT_FOUND, `plugin ${instance} not ready`);
+    return {
+      ...entry.ctx,
+      logger: entry.ctx.logger.child({ batchId: extra.batchId }),
+      query: extra.query,
+      signal: AbortSignal.any([entry.controller.signal, extra.signal]),
+    };
+  }
+
   /** 构造一次 Run 的上下文：signal 同时受实例停止与 Run 取消控制。 */
   /**
    * 构造一次 Run 的上下文：
@@ -233,7 +267,7 @@ export class PluginHost {
     return {
       ...entry.ctx,
       logger: entry.ctx.logger.child({ runId: extra.runId }),
-      files: this.#deps.content.artifacts(extra.runId),
+      files: this.#deps.content.artifacts({ taskId: extra.taskId, runId: extra.runId }),
       paths: {
         ...entry.ctx.paths,
         ...(workspace ? { work: workspace.work, artifacts: workspace.artifacts } : {}),
@@ -304,6 +338,10 @@ export class PluginHost {
       status: e.status,
       crashes: e.crashes,
       ...(e.error === undefined ? {} : { error: e.error }),
+      ...(e.description === undefined ? {} : { description: e.description }),
+      ...(e.def.kind === 'agent' && e.impl
+        ? { capabilities: (e.impl as AgentPlugin).capabilities }
+        : {}),
     }));
   }
 

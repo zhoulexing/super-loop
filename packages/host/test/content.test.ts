@@ -33,20 +33,22 @@ describe('createFsContent', () => {
     expect(layout.attachmentsDir).toContain('attachments');
   });
 
-  it('工作区包含 work/ 与 artifacts/；直接写入 artifacts/ 的文件会被列出', async () => {
+  it('工作区按任务：work/ 共用，artifacts/<runId>/ 每次 Run 一个；直接写入 artifacts/ 的文件会被列出', async () => {
     const { layout, content } = await setup();
     const runId = newId('run');
-    const ws = await content.workspace(runId);
+    const taskId = newId('task');
+    const scope = { taskId, runId };
+    const ws = await content.workspace(scope);
     expect(ws).toEqual({
-      work: join(layout.workspacesDir, runId, 'work'),
-      artifacts: join(layout.workspacesDir, runId, 'artifacts'),
+      work: join(layout.workspacesDir, taskId, 'work'),
+      artifacts: join(layout.workspacesDir, taskId, 'artifacts', runId),
     });
     // Agent 用 ctx.files 写入，同名自动加序号
-    const a = await content.artifacts(runId).put('# r', { name: 'report.md' });
-    const b = await content.artifacts(runId).put('# r2', { name: 'report.md' });
+    const a = await content.artifacts(scope).put('# r', { name: 'report.md' });
+    const b = await content.artifacts(scope).put('# r2', { name: 'report.md' });
     expect([a.ref, b.ref]).toEqual([
-      `artifact:${runId}/report.md`,
-      `artifact:${runId}/report-1.md`,
+      `artifact:${taskId}/${runId}/report.md`,
+      `artifact:${taskId}/${runId}/report-1.md`,
     ]);
     // Agent（如 CLI）直接往目录里写，含子目录
     await mkdir(join(ws.artifacts, 'screens'), { recursive: true });
@@ -54,20 +56,24 @@ describe('createFsContent', () => {
     // work/ 里的文件不算产物
     await writeFile(join(ws.work, 'tmp.txt'), 'x');
 
-    const list = await content.listArtifacts(runId);
+    const list = await content.listArtifacts(scope);
     expect(list.map((f) => [f.ref, f.mime, f.size])).toEqual([
-      [`artifact:${runId}/report-1.md`, 'text/markdown', 4],
-      [`artifact:${runId}/report.md`, 'text/markdown', 3],
-      [`artifact:${runId}/screens/home.png`, 'image/png', 3],
+      [`artifact:${taskId}/${runId}/report-1.md`, 'text/markdown', 4],
+      [`artifact:${taskId}/${runId}/report.md`, 'text/markdown', 3],
+      [`artifact:${taskId}/${runId}/screens/home.png`, 'image/png', 3],
     ]);
-    expect(await content.listArtifacts(newId('run'))).toEqual([]);
+    expect(await content.listArtifacts({ taskId, runId: newId('run') })).toEqual([]);
   });
 
   it('拒绝路径穿越与指向目录外的符号链接', async () => {
     const { layout, content } = await setup();
     const runId = newId('run');
-    const ws = await content.workspace(runId);
-    await expect(content.read(`artifact:${runId}/../../config.json`)).rejects.toMatchObject({
+    const taskId = newId('task');
+    const scope = { taskId, runId };
+    const ws = await content.workspace(scope);
+    await expect(
+      content.read(`artifact:${taskId}/${runId}/../../config.json`),
+    ).rejects.toMatchObject({
       code: 'INVALID_INPUT',
     });
     await expect(content.read('attachment:2026-11-05/..')).rejects.toMatchObject({
@@ -76,11 +82,11 @@ describe('createFsContent', () => {
 
     writeFileSync(join(layout.home, 'secret.txt'), 'top secret');
     symlinkSync(join(layout.home, 'secret.txt'), join(ws.artifacts, 'leak.txt'));
-    await expect(content.read(`artifact:${runId}/leak.txt`)).rejects.toMatchObject({
+    await expect(content.read(`artifact:${taskId}/${runId}/leak.txt`)).rejects.toMatchObject({
       code: 'PERMISSION_DENIED',
     });
-    expect(await content.stat(`artifact:${runId}/leak.txt`)).toBeUndefined();
-    expect((await content.listArtifacts(runId)).map((f) => f.name)).not.toContain('leak.txt');
+    expect(await content.stat(`artifact:${taskId}/${runId}/leak.txt`)).toBeUndefined();
+    expect((await content.listArtifacts(scope)).map((f) => f.name)).not.toContain('leak.txt');
   });
 
   it('单文件大小上限；不存在的文件返回 NOT_FOUND / undefined', async () => {
@@ -88,7 +94,7 @@ describe('createFsContent', () => {
     await expect(content.attachments.put('12345', { name: 'big.bin' })).rejects.toMatchObject({
       code: 'INVALID_INPUT',
     });
-    const missing = `artifact:${newId('run')}/nope.txt`;
+    const missing = `artifact:${newId('task')}/${newId('run')}/nope.txt`;
     expect(await content.stat(missing)).toBeUndefined();
     await expect(content.read(missing)).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });

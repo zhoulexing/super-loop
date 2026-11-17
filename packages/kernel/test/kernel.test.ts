@@ -20,7 +20,7 @@ import {
   waitFor,
 } from '@super-loop/testkit';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Kernel, type KernelConfigInput } from '../src/index.js';
+import { Kernel, type KernelConfigInput, MANUAL_SOURCE } from '../src/index.js';
 
 const ok = (summary = 'done'): AgentEvent => ({ type: 'result', status: 'succeeded', summary });
 
@@ -102,12 +102,15 @@ async function journalTypes(store: Store): Promise<JournalEventType[]> {
 }
 
 describe('Kernel 主流程', () => {
-  it('提交 → 路由 → 执行 → 成功 → 通知', async () => {
+  it('Inbox → 路由 → 执行 → 成功 → Outbox 通知', async () => {
     const { kernel, store, sink } = await setup();
-    const { envelopeId, duplicated } = await kernel.submit(draft({ subject: 'say hi' }));
+    const { envelopeId, duplicated } = await kernel.inbox(draft({ subject: 'say hi' }), {
+      source: MANUAL_SOURCE,
+      actor: 'user:api',
+    });
     expect(duplicated).toBe(false);
 
-    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['succeeded']);
+    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['awaiting_input']);
     expect(task.attempts).toBe(1);
     const run = await store.runs.get(task.lastRunId as never);
     expect(run).toMatchObject({ status: 'succeeded', summary: 'echo: say hi' });
@@ -130,7 +133,9 @@ describe('Kernel 主流程', () => {
       'run.started',
       'run.event',
       'run.succeeded',
-      'task.succeeded',
+      'turn.added',
+      'turn.completed',
+      'task.awaiting_input',
       'delivery.succeeded',
     ] as const) {
       expect(types).toContain(t);
@@ -141,17 +146,49 @@ describe('Kernel 主流程', () => {
     const { kernel, store } = await setup();
     const d = draft({ idempotencyKey: 'same' });
     const a = await kernel.submit(d);
-    const b = await kernel.submit(d);
+    const b = await kernel.submit({ ...d, subject: 'duplicate must not overwrite the original' });
     expect(b).toEqual({ envelopeId: a.envelopeId, duplicated: true });
+    expect((await store.envelopes.list()).items).toHaveLength(1);
+    expect(await store.envelopes.get(a.envelopeId)).toMatchObject(d);
     expect((await store.tasks.list()).items).toHaveLength(1);
-    expect(await journalTypes(store)).toContain('envelope.duplicated');
+    const events = (await store.readJournal(1, 10_000)).filter(
+      (e) => e.subject.kind === 'envelope' && e.subject.id === a.envelopeId,
+    );
+    expect(events.filter((e) => e.type === 'envelope.received')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'envelope.duplicated')).toHaveLength(1);
   });
 
-  it('没有匹配的路由 → envelope.unrouted', async () => {
+  it('Inbox 校验失败时拒收，不产生消息、任务或接收事件', async () => {
     const { kernel, store } = await setup({ config: { routes: [] } });
-    await kernel.submit(draft());
-    expect(await journalTypes(store)).toContain('envelope.unrouted');
+    await expect(
+      kernel.inbox(draft({ subject: '' }), { source: MANUAL_SOURCE, actor: 'user:api' }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    expect((await store.envelopes.list()).items).toHaveLength(0);
     expect((await store.tasks.list()).items).toHaveLength(0);
+    expect(await journalTypes(store)).not.toContain('envelope.received');
+  });
+
+  it('没有匹配的路由 → 进入"未分配"（triage）；unrouted=drop 时只记录', async () => {
+    const { kernel, store } = await setup({ config: { routes: [] } });
+    const { envelopeId } = await kernel.submit(draft({ subject: 'who?' }));
+    expect(await journalTypes(store)).toContain('envelope.unrouted');
+    const t = await taskOf(store, envelopeId);
+    expect(t).toMatchObject({ status: 'unassigned', subject: 'who?', source: 'manual:api' });
+    expect(t.agent).toBeUndefined();
+
+    const dropped = await setup({
+      config: {
+        routes: [],
+        defaults: { unrouted: 'drop', sinks: [{ sink: 'test:sink', on: ['succeeded'] }] },
+      },
+    });
+    const input = draft({ subject: 'record without a task', payload: { event: 'ignored' } });
+    const accepted = await dropped.kernel.submit(input);
+    expect((await dropped.store.tasks.list()).items).toHaveLength(0);
+    expect(await dropped.store.envelopes.get(accepted.envelopeId)).toMatchObject(input);
+    expect(await journalTypes(dropped.store)).toEqual(
+      expect.arrayContaining(['envelope.received', 'envelope.unrouted']),
+    );
   });
 
   it('directives 指定 Agent，并支持扇出', async () => {
@@ -164,7 +201,7 @@ describe('Kernel 主流程', () => {
     );
     await waitFor(async () => {
       const { items } = await store.tasks.list({ where: { envelopeId: envelopeId as never } });
-      return items.length === 2 && items.every((t) => t.status === 'succeeded');
+      return items.length === 2 && items.every((t) => t.status === 'awaiting_input');
     });
   });
 
@@ -178,10 +215,15 @@ describe('Kernel 主流程', () => {
       config: { routes: [{ name: 'r', agents: [{ agent: 'writer:default' }] }] },
     });
     const { envelopeId } = await kernel.submit(draft({ subject: 'weekly' }));
-    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['succeeded']);
+    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['awaiting_input']);
     const run = await store.runs.get(task.lastRunId as never);
     expect(run?.artifacts).toEqual([
-      { ref: `artifact:${run?.id}/report.md`, name: 'report.md', mime: 'text/markdown', size: 8 },
+      {
+        ref: `artifact:${task.id}/${run?.id}/report.md`,
+        name: 'report.md',
+        mime: 'text/markdown',
+        size: 8,
+      },
     ]);
     expect(
       new TextDecoder().decode(await kernel.content.read(run?.artifacts?.[0]?.ref as string)),
@@ -191,16 +233,16 @@ describe('Kernel 主流程', () => {
   it('按 permissions 提供目录，Run 拿到 work / artifacts 工作区', async () => {
     const seen: Record<string, unknown> = {};
     const dirs = {
-      workspace: async (runId: string) => ({
-        work: `/ws/${runId}/work`,
-        artifacts: `/ws/${runId}/artifacts`,
+      workspace: async ({ taskId, runId }: { taskId: string; runId: string }) => ({
+        work: `/ws/${taskId}/work`,
+        artifacts: `/ws/${taskId}/artifacts/${runId}`,
       }),
       shared: async () => '/home/shared',
       state: async (instance: string) => `/home/state/${instance.replace(':', '/')}`,
       cache: async (plugin: string) => `/home/cache/${plugin}`,
     };
     const base = defineTestAgent(async function* (input, ctx) {
-      seen[ctx.instance] = { paths: ctx.paths, workspace: input.workspace };
+      seen[ctx.instance] = { paths: ctx.paths, taskId: input.taskId, runId: input.runId };
       yield ok();
     });
     const withPerms = { ...base, name: 'agent-perm', permissions: ['fs:state', 'fs:shared:read'] };
@@ -217,16 +259,14 @@ describe('Kernel 主流程', () => {
     await kernel.start();
     for (const agent of ['perm:a', 'plain:a'] as const) {
       const { envelopeId } = await kernel.submit(draft({ directives: { agents: [{ agent }] } }));
-      await waitStatus(store, (await taskOf(store, envelopeId)).id, ['succeeded']);
+      await waitStatus(store, (await taskOf(store, envelopeId)).id, ['awaiting_input']);
     }
-    const runIdOf = (x: unknown) =>
-      (x as { workspace: { path: string } }).workspace.path.split('/')[2];
-    const perm = seen['perm:a'] as { paths: Record<string, string> };
+    const perm = seen['perm:a'] as { paths: Record<string, string>; taskId: string; runId: string };
     expect(perm.paths).toEqual({
       shared: '/home/shared',
       state: '/home/state/perm/a',
-      work: `/ws/${runIdOf(perm)}/work`,
-      artifacts: `/ws/${runIdOf(perm)}/artifacts`,
+      work: `/ws/${perm.taskId}/work`,
+      artifacts: `/ws/${perm.taskId}/artifacts/${perm.runId}`,
     });
     // 没声明权限的插件只拿到本次 Run 的工作区
     expect(Object.keys((seen['plain:a'] as { paths: object }).paths).sort()).toEqual([
@@ -247,7 +287,7 @@ describe('Kernel 主流程', () => {
       },
     });
     const { envelopeId } = await kernel.submit(draft({ payload: { issue: '#42' } }));
-    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['succeeded']);
+    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['awaiting_input']);
     expect((await store.runs.get(task.lastRunId as never))?.summary).toBe('echo: Fix: #42');
   });
 });
@@ -273,13 +313,13 @@ describe('Kernel 重试与失败', () => {
       config: { routes: [{ name: 'r', agents: [{ agent: 'flaky:default' }] }] },
     });
     const { envelopeId } = await kernel.submit(draft());
-    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['succeeded']);
+    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['awaiting_input']);
     expect(task.attempts).toBe(2);
     const runs = (await store.runs.list({ where: { taskId: task.id } })).items;
     expect(runs.map((r) => r.status)).toEqual(['failed', 'succeeded']);
   });
 
-  it('不可重试失败直接进入 dead 并发送失败通知', async () => {
+  it('不可重试失败直接进入 failed 并发送失败通知', async () => {
     const bad = defineTestAgent(async function* () {
       yield {
         type: 'result',
@@ -293,12 +333,12 @@ describe('Kernel 重试与失败', () => {
       config: { routes: [{ name: 'r', agents: [{ agent: 'bad:default' }] }] },
     });
     const { envelopeId } = await kernel.submit(draft());
-    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['dead']);
+    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['failed']);
     expect(task.lastError?.code).toBe('INVALID_INPUT');
     await waitFor(() => sink.received.some((n) => n.trigger === 'failed'));
   });
 
-  it('重试耗尽进入 dead', async () => {
+  it('重试耗尽进入 failed', async () => {
     const always = defineTestAgent(async function* () {
       yield {
         type: 'result',
@@ -314,7 +354,7 @@ describe('Kernel 重试与失败', () => {
       },
     });
     const { envelopeId } = await kernel.submit(draft());
-    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['dead']);
+    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['failed']);
     expect(task.attempts).toBe(3);
   });
 
@@ -336,7 +376,7 @@ describe('Kernel 重试与失败', () => {
       },
     });
     const { envelopeId } = await kernel.submit(draft());
-    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['dead']);
+    const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['failed']);
     expect(task.lastError?.code).toBe('TIMEOUT');
     expect((await store.runs.get(task.lastRunId as never))?.status).toBe('timed_out');
     expect(kernel.activeRuns).toBe(0);
@@ -355,7 +395,7 @@ describe('Kernel 重试与失败', () => {
     });
     for (let i = 0; i < 2; i++) {
       const { envelopeId } = await kernel.submit(draft());
-      const t = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['dead']);
+      const t = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['failed']);
       expect(t.lastError?.code).toBe('PLUGIN_PROTOCOL_VIOLATION');
     }
     await waitFor(
@@ -369,12 +409,12 @@ describe('Kernel 重试与失败', () => {
     expect(await journalTypes(store)).toContain('plugin.disabled');
   });
 
-  it('引用不存在的 Agent → dead（PLUGIN_NOT_FOUND）', async () => {
+  it('引用不存在的 Agent → failed（PLUGIN_NOT_FOUND）', async () => {
     const { kernel, store } = await setup();
     const { envelopeId } = await kernel.submit(
       draft({ directives: { agents: [{ agent: 'ghost:x' }] } }),
     );
-    const t = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['dead']);
+    const t = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['failed']);
     expect(t.lastError?.code).toBe('PLUGIN_NOT_FOUND');
   });
 });
@@ -400,12 +440,13 @@ describe('Kernel 并发与取消', () => {
     });
     await Promise.all([kernel.submit(draft()), kernel.submit(draft()), kernel.submit(draft())]);
     await waitFor(
-      async () => (await store.tasks.list({ where: { status: 'succeeded' } })).items.length === 3,
+      async () =>
+        (await store.tasks.list({ where: { status: 'awaiting_input' } })).items.length === 3,
     );
     expect(maxRunning).toBe(1);
   });
 
-  it('取消运行中的任务', async () => {
+  it('关闭运行中的任务：中止 Run，outcome = cancelled', async () => {
     const slow = defineTestAgent(async function* (_input, ctx) {
       await sleep(5_000, ctx.signal);
       yield ok();
@@ -417,8 +458,11 @@ describe('Kernel 并发与取消', () => {
     const { envelopeId } = await kernel.submit(draft());
     const task = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['running']);
     await kernel.cancelTask(task.id, 'user:alice');
-    const done = await waitStatus(store, task.id, ['cancelled']);
+    const done = await waitStatus(store, task.id, ['closed']);
+    expect(done.outcome).toBe('cancelled');
     expect((await store.runs.get(done.lastRunId as never))?.status).toBe('cancelled');
+    const turns = (await store.turns.list({ where: { taskId: task.id } })).items;
+    expect(turns.map((t) => t.status)).toEqual(['cancelled']);
     await expect(kernel.cancelTask(task.id, 'user:alice')).rejects.toMatchObject({
       code: 'CONFLICT',
     });
@@ -458,7 +502,7 @@ describe('Kernel 审批', () => {
         sink.received.some((n) => n.trigger === 'approval_required' && n.links.approve),
       );
       await kernel.decideApproval(approval.id, { decision, by: 'user:alice' });
-      const done = await waitStatus(store, task.id, ['succeeded']);
+      const done = await waitStatus(store, task.id, ['awaiting_input']);
       expect((await store.runs.get(done.lastRunId as never))?.summary).toBe(
         decision === 'grant' ? 'pushed' : 'skipped',
       );
@@ -466,7 +510,7 @@ describe('Kernel 审批', () => {
     expect(decisions).toEqual([true, false]);
   });
 
-  it('requireApproval：审批通过后才执行，拒绝则 rejected', async () => {
+  it('requireApproval：审批通过后才执行，拒绝则关闭（rejected）', async () => {
     const { kernel, store } = await setup({
       config: {
         routes: [
@@ -490,8 +534,8 @@ describe('Kernel 审批', () => {
       decision: 'reject',
       by: 'user:alice',
     });
-    await waitStatus(store, ta.id, ['succeeded']);
-    await waitStatus(store, tb.id, ['rejected']);
+    await waitStatus(store, ta.id, ['awaiting_input']);
+    expect((await waitStatus(store, tb.id, ['closed'])).outcome).toBe('rejected');
     await expect(
       kernel.decideApproval(approvalOf(ta.id)?.id as never, {
         decision: 'grant',
@@ -510,7 +554,8 @@ describe('Kernel 审批', () => {
       },
     });
     const { envelopeId } = await kernel.submit(draft());
-    await waitStatus(store, (await taskOf(store, envelopeId)).id, ['rejected']);
+    const t = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['closed']);
+    expect(t.outcome).toBe('rejected');
     expect(await journalTypes(store)).toContain('approval.expired');
   });
 });
@@ -522,25 +567,44 @@ describe('Kernel 恢复与投递', () => {
     const env = makeEnvelope({ source: { plugin: 'kernel', instance: 'manual:api' } });
     const taskId = newId('task');
     const runId = newId('run');
+    const turnId = newId('turn');
     const at = new Date().toISOString();
     await store.envelopes.put(env);
     await store.tasks.put({
       id: taskId,
       envelopeId: env.id,
       traceId: env.trace.traceId,
+      subject: env.subject,
+      source: env.source.instance,
       agent: { agent: 'echo:default' },
       sinks: [],
       policy: { ...DEFAULT_TASK_POLICY, backoff: { type: 'fixed', baseMs: 10, maxMs: 10 } },
       priority: 2,
+      rank: 0,
       status: 'running',
+      closeOnComplete: false,
       attempts: 1,
       lastRunId: runId,
+      turnCount: 1,
+      artifactCount: 0,
+      createdAt: at,
+      updatedAt: at,
+    });
+    await store.turns.put({
+      id: turnId,
+      taskId,
+      index: 1,
+      content: 'hi',
+      by: 'user:api',
+      status: 'running',
+      runIds: [runId],
       createdAt: at,
       updatedAt: at,
     });
     await store.runs.put({
       id: runId,
       taskId,
+      turnId,
       attempt: 1,
       agent: 'echo:default',
       status: 'running',
@@ -549,7 +613,7 @@ describe('Kernel 恢复与投递', () => {
     });
 
     const { store: s } = await setup({ store });
-    const done = await waitStatus(s, taskId, ['succeeded']);
+    const done = await waitStatus(s, taskId, ['awaiting_input']);
     expect(done.attempts).toBe(2);
     const runs = (await s.runs.list({ where: { taskId } })).items;
     expect(runs.map((r) => r.status)).toEqual(['failed', 'succeeded']);
@@ -624,7 +688,7 @@ describe('Kernel 恢复与投递', () => {
     expect(root?.source).toMatchObject({ plugin: 'source-test', instance: 'feed:main' });
 
     await waitFor(
-      async () => (await store.tasks.list({ where: { status: 'succeeded' } })).items.length === 2,
+      async () => (await store.tasks.list({ where: { status: 'closed' } })).items.length === 2,
     );
     const envs = (await store.envelopes.list()).items;
     const child = envs.find((e) => e.subject === 'child');
@@ -676,7 +740,252 @@ describe('Kernel 恢复与投递', () => {
     const seen: string[] = [];
     const off = kernel.subscribe((events) => seen.push(...events.map((e) => e.type)));
     await kernel.submit(draft());
-    await waitFor(() => seen.includes('task.succeeded'));
+    await waitFor(() => seen.includes('task.awaiting_input'));
     off();
+  });
+});
+
+describe('Kernel 会话（多轮对话 / 分配 / 关闭）', () => {
+  const turnsOf = async (store: Store, taskId: TaskId) =>
+    (await store.turns.list({ where: { taskId } })).items.sort((a, b) => a.index - b.index);
+
+  it('手动提交默认保持会话：追问开启新一轮，Agent 拿到历史；自动化来源完成即关闭', async () => {
+    const inputs: { prompt: string; history: unknown; turn: number; attempt: number }[] = [];
+    const chat = defineTestAgent(async function* (input) {
+      inputs.push({
+        prompt: input.prompt,
+        history: input.history,
+        turn: input.turn.index,
+        attempt: input.attempt,
+      });
+      yield ok(`re: ${input.prompt}`);
+    });
+    const { kernel, store } = await setup({
+      agents: { 'chat:default': chat },
+      config: { routes: [{ name: 'r', agents: [{ agent: 'chat:default' }] }] },
+    });
+    const { envelopeId } = await kernel.submit(draft({ subject: 'q1' }));
+    const t1 = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['awaiting_input']);
+    expect(t1).toMatchObject({ closeOnComplete: false, lastSummary: 're: q1', turnCount: 1 });
+
+    const turn = await kernel.sendMessage(t1.id, { content: 'q2' }, 'user:alice');
+    expect(turn).toMatchObject({ index: 2, status: 'pending', by: 'user:alice' });
+    const t2 = await waitStatus(store, t1.id, ['awaiting_input']);
+    expect(t2).toMatchObject({ turnCount: 2, lastSummary: 're: q2', attempts: 1 });
+    expect(inputs[1]).toEqual({
+      prompt: 'q2',
+      history: [
+        { role: 'user', content: 'q1' },
+        { role: 'assistant', content: 're: q1' },
+      ],
+      turn: 2,
+      attempt: 1,
+    });
+    expect((await turnsOf(store, t1.id)).map((t) => [t.index, t.status, t.reply])).toEqual([
+      [1, 'completed', 're: q1'],
+      [2, 'completed', 're: q2'],
+    ]);
+
+    // directives.closeOnComplete：完成即关闭
+    const auto = await kernel.submit(draft({ directives: { closeOnComplete: true } }));
+    const closed = await waitStatus(store, (await taskOf(store, auto.envelopeId)).id, ['closed']);
+    expect(closed.outcome).toBe('succeeded');
+    expect(closed.closedAt).toBeDefined();
+  });
+
+  it('执行中发消息默认排队，本轮结束后自动处理；interrupt 会中止当前轮', async () => {
+    let release: (() => void) | undefined;
+    const prompts: string[] = [];
+    const gated = defineTestAgent(async function* (input, ctx) {
+      prompts.push(input.prompt);
+      if (input.prompt.startsWith('slow')) {
+        await new Promise<void>((resolve, reject) => {
+          release = resolve;
+          ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason), { once: true });
+        });
+      }
+      yield ok(`re: ${input.prompt}`);
+    });
+    const { kernel, store } = await setup({
+      agents: { 'gated:default': gated },
+      config: { routes: [{ name: 'r', agents: [{ agent: 'gated:default' }] }] },
+    });
+
+    // 排队
+    const a = await kernel.submit(draft({ subject: 'slow-1' }));
+    const ta = await waitStatus(store, (await taskOf(store, a.envelopeId)).id, ['running']);
+    await kernel.sendMessage(ta.id, { content: 'fast-2' }, 'user:alice');
+    expect((await store.tasks.get(ta.id))?.status).toBe('running');
+    release?.();
+    await waitFor(async () => (await turnsOf(store, ta.id)).every((t) => t.status === 'completed'));
+    expect((await waitStatus(store, ta.id, ['awaiting_input'])).lastSummary).toBe('re: fast-2');
+
+    // 打断
+    const b = await kernel.submit(draft({ subject: 'slow-3' }));
+    const tb = await waitStatus(store, (await taskOf(store, b.envelopeId)).id, ['running']);
+    await kernel.sendMessage(tb.id, { content: 'fast-4', mode: 'interrupt' }, 'user:alice');
+    await waitFor(async () => (await turnsOf(store, tb.id))[1]?.status === 'completed');
+    expect((await turnsOf(store, tb.id)).map((t) => t.status)).toEqual([
+      'interrupted',
+      'completed',
+    ]);
+    const runs = (await store.runs.list({ where: { taskId: tb.id } })).items;
+    expect(runs.map((r) => [r.status, r.error?.code])).toEqual([
+      ['cancelled', 'INTERRUPTED'],
+      ['succeeded', undefined],
+    ]);
+    expect(await journalTypes(store)).toContain('turn.interrupted');
+    expect(prompts).toEqual(['slow-1', 'fast-2', 'slow-3', 'fast-4']);
+  });
+
+  it('assign: manual → 未分配；分配后按候选的提示词执行；排队中可退回未分配', async () => {
+    const { kernel, store } = await setup({
+      config: {
+        routes: [
+          {
+            name: 'triage',
+            assign: 'manual',
+            agents: [{ agent: 'echo:default', prompt: 'Look: {{envelope.subject}}' }],
+          },
+        ],
+      },
+    });
+    const { envelopeId } = await kernel.submit(draft({ subject: 'bug' }));
+    const t = await taskOf(store, envelopeId);
+    expect(t.status).toBe('unassigned');
+    expect(t.candidates?.map((c) => c.agent)).toEqual(['echo:default']);
+    await expect(
+      kernel.assignTask(t.id, { agent: 'ghost:x' as never }, 'user:alice'),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+
+    await kernel.assignTask(t.id, { agent: 'echo:default' }, 'user:alice');
+    const done = await waitStatus(store, t.id, ['awaiting_input']);
+    expect(done.agent).toEqual({ agent: 'echo:default', prompt: 'Look: {{envelope.subject}}' });
+    expect(done.lastSummary).toBe('echo: Look: bug');
+    expect(await journalTypes(store)).toContain('task.assigned');
+
+    // 插件被禁用时任务停留在 queued，可以退回未分配
+    const pausedStore = new MemoryStore();
+    const paused = new Kernel({
+      store: pausedStore,
+      config: {
+        routes: [{ name: 'r', agents: [{ agent: 'off:default' }] }],
+        plugins: { 'off:default': { use: echo, enabled: false } },
+        limits: { tickMs: 10 },
+      },
+    });
+    kernels.push(paused);
+    await paused.start();
+    const p = await paused.submit(draft());
+    const pt = await taskOf(pausedStore, p.envelopeId);
+    await sleep(30);
+    expect((await pausedStore.tasks.get(pt.id))?.status).toBe('queued');
+    const back = await paused.unassignTask(pt.id, 'user:alice');
+    expect(back.status).toBe('unassigned');
+    expect(back.agent).toBeUndefined();
+  });
+
+  it('失败后可重试（并换 Agent）；关闭 / 重新打开；给已关闭的任务发消息会自动重新打开', async () => {
+    const bad = defineTestAgent(async function* () {
+      yield {
+        type: 'result',
+        status: 'failed',
+        summary: 'nope',
+        error: { code: 'INVALID_INPUT', message: 'nope', retryable: false },
+      };
+    });
+    const { kernel, store } = await setup({
+      agents: { 'bad:default': bad },
+      config: { routes: [{ name: 'r', agents: [{ agent: 'bad:default' }] }] },
+    });
+    const { envelopeId } = await kernel.submit(draft({ subject: 'x' }));
+    const t = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['failed']);
+    await expect(kernel.reopenTask(t.id, 'user:a')).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    await kernel.retryTask(t.id, 'user:alice', { agent: 'echo:default' });
+    const ok1 = await waitStatus(store, t.id, ['awaiting_input']);
+    expect(ok1).toMatchObject({ agent: { agent: 'echo:default' }, attempts: 1 });
+    expect((await turnsOf(store, t.id)).map((x) => x.status)).toEqual(['completed']);
+
+    const closed = await kernel.closeTask(t.id, 'user:alice');
+    expect(closed).toMatchObject({ status: 'closed', outcome: 'succeeded' });
+    await expect(kernel.closeTask(t.id, 'user:alice')).rejects.toMatchObject({ code: 'CONFLICT' });
+    const reopened = await kernel.reopenTask(t.id, 'user:alice');
+    expect(reopened.status).toBe('awaiting_input');
+    expect(reopened.outcome).toBeUndefined();
+
+    await kernel.closeTask(t.id, 'user:alice');
+    await kernel.sendMessage(t.id, { content: 'again' }, 'user:alice');
+    const again = await waitStatus(store, t.id, ['awaiting_input']);
+    expect(again.turnCount).toBe(2);
+    const types = await journalTypes(store);
+    for (const ty of ['task.failed', 'task.closed', 'task.reopened'] as const) {
+      expect(types).toContain(ty);
+    }
+  });
+
+  it('等待追问超过 idleCloseMs 自动关闭', async () => {
+    const { kernel, store } = await setup({ config: { limits: { idleCloseMs: 30 } } });
+    const { envelopeId } = await kernel.submit(draft());
+    const t = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['closed']);
+    expect(t.outcome).toBe('succeeded');
+    const closedEvent = (await store.readJournal(1, 10_000)).find((e) => e.type === 'task.closed');
+    expect(closedEvent?.data).toMatchObject({ reason: 'idle' });
+  });
+
+  it('同优先级按 rank 派发；reprioritize 调整顺序', async () => {
+    const order: string[] = [];
+    let release: (() => void) | undefined;
+    const serial = defineTestAgent(async function* (input) {
+      order.push(input.envelope.subject);
+      if (input.envelope.subject === 'blocker') {
+        await new Promise<void>((r) => {
+          release = r;
+        });
+      }
+      yield ok();
+    });
+    const { kernel, store } = await setup({
+      agents: { 'serial:default': serial },
+      config: {
+        routes: [{ name: 'r', agents: [{ agent: 'serial:default' }] }],
+        limits: { globalConcurrency: 1 },
+      },
+    });
+    const blocker = await kernel.submit(draft({ subject: 'blocker' }));
+    await waitStatus(store, (await taskOf(store, blocker.envelopeId)).id, ['running']);
+    const b = await taskOf(store, (await kernel.submit(draft({ subject: 'b' }))).envelopeId);
+    const c = await taskOf(store, (await kernel.submit(draft({ subject: 'c' }))).envelopeId);
+    await kernel.reprioritizeTask(c.id, { rank: b.rank - 1 }, 'user:alice');
+    release?.();
+    await waitStatus(store, b.id, ['awaiting_input']);
+    expect(order).toEqual(['blocker', 'c', 'b']);
+  });
+
+  it('resumable Agent 在后续轮次拿到上一轮的 sessionId；产物按任务目录登记', async () => {
+    const resumes: (string | undefined)[] = [];
+    const sess = defineTestAgent(
+      async function* (input, ctx) {
+        resumes.push(input.resume?.sessionId);
+        yield { type: 'session', sessionId: `s-${input.turn.index}` };
+        await ctx.files.put('x', { name: `t${input.turn.index}.txt` });
+        yield ok();
+      },
+      { capabilities: { resumable: true } },
+    );
+    const { kernel, store } = await setup({
+      agents: { 'sess:default': sess },
+      config: { routes: [{ name: 'r', agents: [{ agent: 'sess:default' }] }] },
+    });
+    const { envelopeId } = await kernel.submit(draft());
+    const t = await waitStatus(store, (await taskOf(store, envelopeId)).id, ['awaiting_input']);
+    await kernel.sendMessage(t.id, { content: 'more' }, 'user:alice');
+    await waitFor(async () => (await store.tasks.get(t.id))?.turnCount === 2);
+    const done = await waitStatus(store, t.id, ['awaiting_input']);
+    await waitFor(async () => (await store.tasks.get(t.id))?.artifactCount === 2);
+    expect(resumes).toEqual([undefined, 's-1']);
+    expect(done.lastRunId).toBeDefined();
+    const run = await store.runs.get(done.lastRunId as never);
+    expect(run?.artifacts?.[0]?.ref).toBe(`artifact:${t.id}/${run?.id}/t2.txt`);
   });
 });

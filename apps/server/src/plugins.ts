@@ -5,10 +5,12 @@
  */
 import agentEcho from '@super-loop/agent-echo';
 import type { PluginImporter } from '@super-loop/host';
+import routerDsh from '@super-loop/router-dsh';
 import sinkDashboard from '@super-loop/sink-dashboard';
 
 export const BUILTIN_PLUGINS: Readonly<Record<string, unknown>> = {
   '@super-loop/agent-echo': agentEcho,
+  '@super-loop/router-dsh': routerDsh,
   '@super-loop/sink-dashboard': sinkDashboard,
 };
 

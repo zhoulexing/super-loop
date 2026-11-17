@@ -9,9 +9,13 @@ import {
   type Notification,
   type PluginDefinition,
   PluginManifestSchema,
+  RouteDecisionSchema,
+  type RouterPlugin,
+  type RouterQueries,
+  type RouterRequest,
   type SourcePlugin,
 } from '@super-loop/protocol';
-import { sleep, withTimeout } from '@super-loop/shared';
+import { newId, sleep, withTimeout } from '@super-loop/shared';
 import { describe, expect, it } from 'vitest';
 import {
   createTestAgentRunContext,
@@ -19,9 +23,9 @@ import {
   createTestSourceContext,
   type TestAgentRunContextOptions,
 } from './context.js';
-import { makeAgentRunInput, makeNotification } from './fixtures.js';
+import { makeAgentRunInput, makeEnvelope, makeNotification } from './fixtures.js';
 
-interface ContractBase<K extends 'agent' | 'source' | 'sink', C> {
+interface ContractBase<K extends 'agent' | 'source' | 'sink' | 'router', C> {
   plugin: PluginDefinition<K, C>;
   /** 交给 configSchema 解析的原始配置。 */
   config: unknown;
@@ -30,7 +34,7 @@ interface ContractBase<K extends 'agent' | 'source' | 'sink', C> {
 }
 
 function manifestTests<C>(
-  plugin: PluginDefinition<'agent' | 'source' | 'sink', C>,
+  plugin: PluginDefinition<'agent' | 'source' | 'sink' | 'router', C>,
   kind: string,
   config: unknown,
 ) {
@@ -161,5 +165,83 @@ export function runSinkContractTests<C>(options: SinkContractOptions<C>): void {
       expect(DeliveryResultSchema.safeParse(second).success).toBe(true);
       expect(HealthStatusSchema.safeParse(await sink.health()).success).toBe(true);
     });
+  });
+}
+
+// ───────────────────────────── Router ─────────────────────────────
+
+export interface RouterContractOptions<C = unknown> extends ContractBase<'router', C> {
+  /** 测试用的批次；默认两条消息、两个 Agent。 */
+  request?: RouterRequest;
+  /** 插件需要的密钥 / 目录。 */
+  context?: Parameters<typeof createTestPluginContext>[0];
+}
+
+const emptyQueries: RouterQueries = { searchTasks: async () => [], getTask: async () => undefined };
+
+export function makeRouterRequest(overrides: Partial<RouterRequest> = {}): RouterRequest {
+  const capabilities = {
+    streaming: true,
+    resumable: false,
+    toolApproval: false,
+    workspace: 'none' as const,
+    costReporting: false,
+  };
+  return {
+    batchId: newId('routingBatch'),
+    items: [
+      { taskId: newId('task'), envelope: makeEnvelope({ subject: '修复登录页 500 报错' }) },
+      { taskId: newId('task'), envelope: makeEnvelope({ subject: '写一篇徒步主题的公众号文章' }) },
+    ],
+    agents: [
+      {
+        instance: 'coder:default',
+        plugin: 'agent-test',
+        description: '写代码、修 bug',
+        capabilities,
+      },
+      {
+        instance: 'writer:default',
+        plugin: 'agent-test',
+        description: '写文章、文案',
+        capabilities,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+export function runRouterContractTests<C>(options: RouterContractOptions<C>): void {
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  describe(`router contract: ${options.plugin.name}`, () => {
+    manifestTests(options.plugin, 'router', options.config);
+
+    it(
+      'route 只为本批的 Task 返回合法决策，health 合法',
+      async () => {
+        const ctx = createTestPluginContext(options.context);
+        const router = (await options.plugin.create(
+          options.plugin.configSchema.parse(options.config),
+          ctx,
+        )) as RouterPlugin;
+        const request = options.request ?? makeRouterRequest();
+        try {
+          const result = await withTimeout(
+            (signal) => router.route(request, { ...ctx, signal, query: emptyQueries }),
+            timeoutMs,
+          );
+          const ids = new Set(request.items.map((i) => i.taskId));
+          expect(Array.isArray(result.decisions)).toBe(true);
+          for (const d of result.decisions) {
+            expect(RouteDecisionSchema.safeParse(d).success).toBe(true);
+            expect(ids.has(d.taskId)).toBe(true);
+          }
+          expect(HealthStatusSchema.safeParse(await router.health()).success).toBe(true);
+        } finally {
+          await router.dispose?.();
+        }
+      },
+      timeoutMs + 1_000,
+    );
   });
 }

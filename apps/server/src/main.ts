@@ -1,4 +1,6 @@
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { acquireLock, createFsContent, loadConfig, resolveLayout } from '@super-loop/host';
 import { Kernel, type KernelConfigInput } from '@super-loop/kernel';
@@ -19,7 +21,7 @@ async function main() {
 
   const releaseLock = await acquireLock(layout.lockFile);
   const store = new SqliteStore({ path: layout.dbFile });
-  // 附件写 attachments/，产物与工作区写 workspaces/<runId>/{work,artifacts}/
+  // 附件写 attachments/，工作区与产物写 workspaces/<taskId>/{work,artifacts/<runId>}/
   const fsContent = createFsContent(layout);
   const kernel = new Kernel({
     store,
@@ -39,11 +41,28 @@ async function main() {
   }
 
   const { host, port, token } = loaded.server;
+  // 看板：默认取 apps/dashboard/dist（src/ 与 dist/ 下的 main 都在同一层级），可用环境变量覆盖
+  const dashboardDir = resolve(
+    env.SUPER_LOOP_DASHBOARD_DIR ?? fileURLToPath(new URL('../../dashboard/dist', import.meta.url)),
+  );
+  const hasDashboard = existsSync(join(dashboardDir, 'index.html'));
+  if (!hasDashboard) {
+    logger.info('dashboard not built, serving API only', {
+      hint: 'pnpm --filter @super-loop/dashboard build',
+      dir: dashboardDir,
+    });
+  }
   const server = serve(
-    { fetch: createApp({ kernel, token }).fetch, port, hostname: host },
+    {
+      fetch: createApp({ kernel, token, dashboardDir: hasDashboard ? dashboardDir : undefined })
+        .fetch,
+      port,
+      hostname: host,
+    },
     (info) =>
-      logger.info('api listening', {
-        url: `http://${host}:${info.port}/api/v1`,
+      logger.info('server listening', {
+        api: `http://${host}:${info.port}/api/v1`,
+        ...(hasDashboard ? { dashboard: `http://${host}:${info.port}/` } : {}),
         home: layout.home,
         db: layout.dbFile,
       }),

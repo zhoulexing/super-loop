@@ -35,6 +35,8 @@ export const HostConfigFileSchema = z
             use: z.string().min(1),
             config: z.unknown().optional(),
             enabled: z.boolean().optional(),
+            /** 这个实例是做什么的（Router 据此分派任务）。 */
+            description: z.string().optional(),
           })
           .strict(),
       )
@@ -58,7 +60,12 @@ export interface KernelConfigPayload {
   publicUrl: string;
   plugins: Record<
     string,
-    { use: PluginDefinition<PluginKind, unknown>; config?: unknown; enabled?: boolean }
+    {
+      use: PluginDefinition<PluginKind, unknown>;
+      config?: unknown;
+      enabled?: boolean;
+      description?: string;
+    }
   >;
   routes: unknown[];
   defaults?: unknown;
@@ -196,6 +203,7 @@ export async function loadConfig(options: LoadConfigOptions): Promise<LoadedConf
       use: await resolvePlugin(instance, spec.use, layout, importPlugin),
       ...(spec.config === undefined ? {} : { config: spec.config }),
       ...(spec.enabled === undefined ? {} : { enabled: spec.enabled }),
+      ...(spec.description === undefined ? {} : { description: spec.description }),
     };
   }
 

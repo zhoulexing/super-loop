@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { LabelsSchema } from './common.js';
+import { InstanceNameSchema, LabelsSchema } from './common.js';
 import { AgentBindingSchema, EnvelopeKindSchema, SinkBindingSchema } from './envelope.js';
 import { RouteIdSchema } from './ids.js';
 
@@ -54,6 +54,13 @@ export const RouteMatchSchema = z.object({
 });
 export type RouteMatch = z.infer<typeof RouteMatchSchema>;
 
+/**
+ * auto：直接派给 agents；manual：进入"未分配"由人分配；
+ * router：进入"未分配"并交给 Router 插件判断派给谁（agents 为候选，为空表示任意 Agent）。
+ */
+export const AssignModeSchema = z.enum(['auto', 'manual', 'router']);
+export type AssignMode = z.infer<typeof AssignModeSchema>;
+
 export const RouteSchema = z.object({
   id: RouteIdSchema,
   name: z.string().min(1),
@@ -61,10 +68,26 @@ export const RouteSchema = z.object({
   /** 越小越先匹配。 */
   order: z.number().int(),
   match: RouteMatchSchema,
-  agents: z.array(AgentBindingSchema).min(1),
+  /**
+   * auto：按 agents 直接生成 Task 并排队（多个 Agent → 扇出）；
+   * manual：生成一个 unassigned Task，agents 作为候选，由人在看板上分配。
+   */
+  assign: AssignModeSchema,
+  agents: z.array(AgentBindingSchema),
+  /** assign 为 router 时使用哪个 Router 插件实例；不填用 defaults.router。 */
+  router: InstanceNameSchema.optional(),
   sinks: z.array(SinkBindingSchema),
   policy: TaskPolicySchema,
+  /** 覆盖默认的 closeOnComplete（见 Directives.closeOnComplete）。 */
+  closeOnComplete: z.boolean().optional(),
   /** false 时继续匹配后续 Route（扇出）。 */
   stopOnMatch: z.boolean(),
 });
 export type Route = z.infer<typeof RouteSchema>;
+
+/**
+ * 没有匹配到任何 Route 时：triage → 生成 unassigned Task 等人分配；
+ * router → 生成 unassigned Task 并交给 defaults.router 判断；drop → 只记录 envelope.unrouted。
+ */
+export const UnroutedPolicySchema = z.enum(['triage', 'router', 'drop']);
+export type UnroutedPolicy = z.infer<typeof UnroutedPolicySchema>;

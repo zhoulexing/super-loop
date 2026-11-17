@@ -13,6 +13,7 @@ function route(name: string, patch: Partial<Route> = {}): Route {
     enabled: true,
     order: 0,
     match: {},
+    assign: 'auto',
     agents: [{ agent: `echo:${name}` }],
     sinks: [],
     policy: DEFAULT_TASK_POLICY,
@@ -57,7 +58,14 @@ describe('matchRoute', () => {
 
   it('非法正则不匹配，并能被 validateRoute 发现', () => {
     expect(matchRoute({ subjectRegex: '(' }, env)).toBe(false);
-    expect(validateRoute({ name: 'bad', match: { subjectRegex: '(' } })).toHaveLength(1);
+    expect(
+      validateRoute({
+        name: 'bad',
+        match: { subjectRegex: '(' },
+        assign: 'auto',
+        agents: [{ agent: 'echo:x' }],
+      }),
+    ).toHaveLength(1);
   });
 });
 
@@ -67,14 +75,14 @@ describe('resolveBindings', () => {
   const c = route('c', { order: 3 });
 
   it('按 order 匹配，stopOnMatch 停止', () => {
-    expect(resolveBindings(makeEnvelope(), [c, b, a], defaults).map((x) => x.agent.agent)).toEqual([
-      'echo:a',
-    ]);
+    expect(resolveBindings(makeEnvelope(), [c, b, a], defaults).map((x) => x.agent?.agent)).toEqual(
+      ['echo:a'],
+    );
   });
 
   it('stopOnMatch=false 时扇出', () => {
     const r = resolveBindings(makeEnvelope(), [c, b], defaults);
-    expect(r.map((x) => x.agent.agent)).toEqual(['echo:b', 'echo:c']);
+    expect(r.map((x) => x.agent?.agent)).toEqual(['echo:b', 'echo:c']);
   });
 
   it('禁用的 Route 跳过', () => {
@@ -107,5 +115,19 @@ describe('resolveBindings', () => {
     expect(
       resolveBindings(makeEnvelope({ directives: { skipRoutes: true } }), [a], defaults),
     ).toEqual([]);
+  });
+
+  it('assign: manual → 一个不带 Agent 的绑定，agents 作为候选', () => {
+    const m = route('m', {
+      assign: 'manual',
+      agents: [{ agent: 'echo:a' }, { agent: 'codex:b', prompt: 'p' }],
+      closeOnComplete: false,
+    });
+    const r = resolveBindings(makeEnvelope(), [m], defaults);
+    expect(r).toHaveLength(1);
+    expect(r[0]?.agent).toBeUndefined();
+    expect(r[0]?.candidates?.map((c) => c.agent)).toEqual(['echo:a', 'codex:b']);
+    expect(r[0]?.closeOnComplete).toBe(false);
+    expect(validateRoute({ ...m, assign: 'auto', agents: [] })[0]).toMatch(/requires at least one/);
   });
 });
