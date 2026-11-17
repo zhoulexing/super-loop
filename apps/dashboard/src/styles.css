@@ -1056,7 +1056,7 @@ details.tools ol {
 }
 .pop textarea,
 .pop select,
-.modal input,
+.modal input:not([type="radio"]):not([type="checkbox"]),
 .modal textarea,
 .modal select {
   width: 100%;
@@ -1105,7 +1105,7 @@ details.tools ol {
   font-weight: 600;
   font-size: 17px;
 }
-.modal label.f {
+.modal .f {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1122,6 +1122,12 @@ details.tools ol {
   display: flex;
   gap: 8px;
   align-items: center;
+  color: var(--fg);
+}
+.modal input[type="radio"],
+.modal input[type="checkbox"] {
+  flex: none;
+  margin: 0;
 }
 .modal pre {
   margin: 0;
